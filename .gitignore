@@ -5,5 +5,6 @@
 memory/
 linkedin_search/node_modules/
 linkedin_search/output/
+linkedin_search/linkedin_jobs.json
 linkedin_search/*.png
 cv_variants/output/
