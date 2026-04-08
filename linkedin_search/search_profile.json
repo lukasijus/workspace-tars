@@ -1,0 +1,104 @@
+{
+  "defaults": {
+    "sinceHours": 24,
+    "sortBy": "DD",
+    "workTypes": ["2"],
+    "experience": ["4", "5"],
+    "limit": 60
+  },
+  "fitKeywords": {
+    "strong": [
+      "fullstack",
+      "full stack",
+      "javascript",
+      "typescript",
+      "python",
+      "platform",
+      "backend",
+      "linux",
+      "database",
+      "computer vision",
+      "machine vision",
+      "automation",
+      "agentic",
+      "ai"
+    ],
+    "bonus": [
+      "remote",
+      "hybrid",
+      "api",
+      "postgres",
+      "distributed",
+      "ml",
+      "vision"
+    ]
+  },
+  "searches": [
+    {
+      "name": "us-fullstack",
+      "keywords": "Senior Fullstack Engineer",
+      "location": "United States"
+    },
+    {
+      "name": "eu-fullstack",
+      "keywords": "Senior Fullstack Engineer",
+      "location": "European Union"
+    },
+    {
+      "name": "fi-fullstack-hybrid",
+      "keywords": "Senior Fullstack Engineer",
+      "location": "Finland",
+      "workTypes": ["3"]
+    },
+    {
+      "name": "lt-fullstack-hybrid",
+      "keywords": "Senior Fullstack Engineer",
+      "location": "Lithuania",
+      "workTypes": ["3"]
+    },
+    {
+      "name": "us-platform-ai",
+      "keywords": "Platform Engineer AI",
+      "location": "United States"
+    },
+    {
+      "name": "eu-platform-ai",
+      "keywords": "Platform Engineer AI",
+      "location": "European Union"
+    },
+    {
+      "name": "fi-platform-ai-hybrid",
+      "keywords": "Platform Engineer AI",
+      "location": "Finland",
+      "workTypes": ["3"]
+    },
+    {
+      "name": "lt-platform-ai-hybrid",
+      "keywords": "Platform Engineer AI",
+      "location": "Lithuania",
+      "workTypes": ["3"]
+    },
+    {
+      "name": "us-computer-vision",
+      "keywords": "Computer Vision Engineer",
+      "location": "United States"
+    },
+    {
+      "name": "eu-computer-vision",
+      "keywords": "Computer Vision Engineer",
+      "location": "European Union"
+    },
+    {
+      "name": "fi-computer-vision-hybrid",
+      "keywords": "Computer Vision Engineer",
+      "location": "Finland",
+      "workTypes": ["3"]
+    },
+    {
+      "name": "lt-computer-vision-hybrid",
+      "keywords": "Computer Vision Engineer",
+      "location": "Lithuania",
+      "workTypes": ["3"]
+    }
+  ]
+}

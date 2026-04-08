@@ -1,0 +1,20 @@
+{
+  "name": "linkedin_search",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "linkedin:browser": "node open_profile.js --headed",
+    "linkedin:search": "node search_jobs.js",
+    "linkedin:search:headed": "node search_jobs.js --headed",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright-core": "^1.54.2",
+    "puppeteer-core": "^24.40.0"
+  }
+}

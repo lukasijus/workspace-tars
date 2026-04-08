@@ -1,0 +1,9 @@
+.env
+.env.local
+.openclaw/
+.state/
+memory/
+linkedin_search/node_modules/
+linkedin_search/output/
+linkedin_search/*.png
+cv_variants/output/
