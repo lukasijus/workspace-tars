@@ -128,6 +128,31 @@ async function fetchRecentApplications(limit = 25) {
   return result.rows;
 }
 
+async function fetchRetryDiscoveryCandidates(limit = 100) {
+  const result = await query(
+    `SELECT
+      applications.*,
+      jobs.company,
+      jobs.title,
+      jobs.location,
+      jobs.source_url,
+      jobs.is_active,
+      jobs.inactive_reason
+    FROM applications
+    JOIN jobs ON jobs.id = applications.job_id
+    WHERE jobs.is_active IS DISTINCT FROM FALSE
+      AND applications.status IN ($1, $2)
+    ORDER BY applications.updated_at DESC
+    LIMIT $3`,
+    [
+      APPLICATION_STATUS.FAILED,
+      APPLICATION_STATUS.NEEDS_HUMAN_INPUT,
+      limit,
+    ],
+  );
+  return result.rows;
+}
+
 function summarizeRowReason(row) {
   if (row.is_active === false && row.inactive_reason) {
     return row.inactive_reason;
@@ -579,13 +604,15 @@ async function parseFormBody(request) {
 
 async function renderHome() {
   const db = { query };
-  const [stats, pending, needsHumanInput, recent] = await Promise.all([
+  const [stats, pending, needsHumanInput, recent, retryCandidates] = await Promise.all([
     fetchDashboardStats(db),
     findApplicationsForApproval(db, 25),
     fetchApplicationsByStatus(APPLICATION_STATUS.NEEDS_HUMAN_INPUT, 20),
     fetchRecentApplications(20),
+    fetchRetryDiscoveryCandidates(100),
   ]);
   const approvedCount = stats.applicationCounts.approved || 0;
+  const retryableCount = retryCandidates.length;
   const statsCards = Object.entries({
     pending_approval: stats.applicationCounts.pending_approval || 0,
     needs_human_input: stats.applicationCounts.needs_human_input || 0,
@@ -600,6 +627,9 @@ async function renderHome() {
         <p class="muted">Local operator surface for approvals, latest workflow snapshots, and application health.</p>
       </div>
       <div class="hero-actions">
+        <form class="inline js-async-form" method="post" action="/retry-discovery-all" data-pending-label="Retrying discovery for active items…">
+          <button type="submit"${retryableCount ? '' : ' disabled'}>Retry discovery${retryableCount ? ` (${retryableCount})` : ''}</button>
+        </form>
         <form class="inline js-async-form" method="post" action="/submit-approved" data-pending-label="Submitting approved applications…">
           <button class="approve" type="submit"${approvedCount ? '' : ' disabled'}>Submit approved${approvedCount ? ` (${approvedCount})` : ''}</button>
         </form>
@@ -674,6 +704,17 @@ async function handleRetryDiscovery(applicationId, response) {
     return;
   }
 
+  await runRetryDiscoveryForApplication(current);
+
+  response.writeHead(303, { Location: `/applications/${applicationId}` });
+  response.end();
+}
+
+async function runRetryDiscoveryForApplication(current) {
+  if (!current || current.is_active === false) {
+    return null;
+  }
+
   const discovery = await discoverApplicationFlow({
     jobId: current.source_job_id,
     title: current.title,
@@ -685,7 +726,7 @@ async function handleRetryDiscovery(applicationId, response) {
   const outcome = decideDiscoveryOutcome(discovery);
 
   await withTransaction(async (client) => {
-    const updated = await updateApplicationStatus(client, applicationId, {
+    const updated = await updateApplicationStatus(client, current.id, {
       status: outcome.status,
       approvalState: outcome.approvalState,
       flowType: discovery.flowType,
@@ -716,7 +757,7 @@ async function handleRetryDiscovery(applicationId, response) {
 
     await insertApplicationStep(
       client,
-      applicationId,
+      current.id,
       null,
       'discovery',
       outcome.status,
@@ -797,7 +838,22 @@ async function handleRetryDiscovery(applicationId, response) {
     }
   });
 
-  response.writeHead(303, { Location: `/applications/${applicationId}` });
+  return {
+    id: current.id,
+    status: outcome.status,
+    approvalState: outcome.approvalState,
+    flowType: discovery.flowType,
+    reason: discovery.reason || null,
+  };
+}
+
+async function handleRetryDiscoveryAll(response) {
+  const candidates = await fetchRetryDiscoveryCandidates(100);
+  for (const candidate of candidates) {
+    await runRetryDiscoveryForApplication(candidate);
+  }
+
+  response.writeHead(303, { Location: '/' });
   response.end();
 }
 
@@ -856,6 +912,49 @@ async function handleMarkInactive(applicationId, request, response) {
   response.end();
 }
 
+async function handleMarkSubmitted(applicationId, request, response) {
+  const form = await parseFormBody(request).catch(() => new URLSearchParams());
+  const reason =
+    form.get('reason')?.trim() || 'Manually marked submitted from dashboard';
+  const current = await fetchApplicationRow(applicationId);
+
+  if (!current) {
+    sendHtml(response, layout('Not found', '<h1>Not found</h1>'), 404);
+    return;
+  }
+
+  await withTransaction(async (client) => {
+    await updateApplicationStatus(client, applicationId, {
+      status: APPLICATION_STATUS.SUBMITTED,
+      approvalState: APPROVAL_STATE.APPROVED,
+      lastError: null,
+      draftPayload: {
+        reason,
+        manuallyMarkedSubmitted: true,
+      },
+      workerRunId: null,
+      markSubmissionAttempted: true,
+      markSubmitted: true,
+    });
+
+    await insertApplicationStep(
+      client,
+      applicationId,
+      null,
+      'operator',
+      APPLICATION_STATUS.SUBMITTED,
+      {
+        actor: 'dashboard',
+        action: 'mark_submitted',
+        reason,
+      },
+    );
+  });
+
+  response.writeHead(303, { Location: `/applications/${applicationId}` });
+  response.end();
+}
+
 async function handleSubmitApproved(response, applicationId = null) {
   if (applicationId) {
     const current = await fetchApplicationRow(applicationId);
@@ -889,7 +988,7 @@ async function handleSubmitApproved(response, applicationId = null) {
 
 async function requestHandler(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-  const match = url.pathname.match(/^\/applications\/(\d+)(?:\/(approve|reject|retry-discovery|mark-inactive|submit))?$/);
+  const match = url.pathname.match(/^\/applications\/(\d+)(?:\/(approve|reject|retry-discovery|mark-inactive|mark-submitted|submit))?$/);
   const artifactMatch = url.pathname.match(/^\/artifacts\/(\d+)$/);
 
   if (artifactMatch && request.method === 'GET') {
@@ -927,6 +1026,11 @@ async function requestHandler(request, response) {
     return;
   }
 
+  if (request.method === 'POST' && url.pathname === '/retry-discovery-all') {
+    await handleRetryDiscoveryAll(response);
+    return;
+  }
+
   if (match && request.method === 'GET') {
     const detail = await withTransaction((client) => fetchApplicationDetail(client, Number(match[1])));
     if (!detail) {
@@ -954,6 +1058,13 @@ async function requestHandler(request, response) {
         ? `
       <form class="inline js-async-form" method="post" action="/applications/${detail.application.id}/submit" data-pending-label="Submitting application…">
         <button class="approve" type="submit">Submit now</button>
+      </form>`
+        : '';
+    const markSubmittedButton =
+      detail.application.status !== APPLICATION_STATUS.SUBMITTED
+        ? `
+      <form class="inline js-async-form" method="post" action="/applications/${detail.application.id}/mark-submitted" data-pending-label="Marking submitted…">
+        <button class="approve" type="submit">Mark as submitted</button>
       </form>`
         : '';
     const retryButton = detail.application.is_active === false
@@ -988,6 +1099,7 @@ async function requestHandler(request, response) {
       <p><strong>Reason:</strong> ${escapeHtml(detail.application.inactive_reason || detail.application.last_error || detail.application.draft_payload?.reason || 'n/a')}</p>
       ${actionButtons}
       ${submitButton}
+      ${markSubmittedButton}
       ${retryButton}
       ${inactiveButton}
       ${externalStep ? `
@@ -1031,6 +1143,10 @@ async function requestHandler(request, response) {
     }
     if (match[2] === 'submit') {
       await handleSubmitApproved(response, Number(match[1]));
+      return;
+    }
+    if (match[2] === 'mark-submitted') {
+      await handleMarkSubmitted(Number(match[1]), request, response);
       return;
     }
     if (match[2] === 'mark-inactive') {
