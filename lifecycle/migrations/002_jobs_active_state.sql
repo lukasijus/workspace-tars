@@ -1,0 +1,10 @@
+ALTER TABLE jobs
+ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
+ALTER TABLE jobs
+ADD COLUMN IF NOT EXISTS inactive_reason TEXT;
+
+ALTER TABLE jobs
+ADD COLUMN IF NOT EXISTS inactive_detected_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS jobs_active_idx ON jobs (is_active, latest_seen_at DESC);

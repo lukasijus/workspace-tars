@@ -21,6 +21,7 @@ const {
   finishWorkerRun,
   createArtifact,
   upsertJob,
+  updateJobAvailability,
   insertJobRun,
   upsertApplication,
   updateApplicationStatus,
@@ -314,6 +315,10 @@ async function main() {
       });
 
       await withTransaction(async (client) => {
+        await updateJobAvailability(client, item.job.id, {
+          isActive: discovery.jobActive !== false,
+          reason: discovery.inactiveReason || discovery.reason || null,
+        });
         const updated = await updateApplicationStatus(client, item.application.id, {
           status: outcome.status,
           approvalState: outcome.approvalState,

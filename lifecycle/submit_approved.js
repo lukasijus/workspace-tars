@@ -15,6 +15,7 @@ const {
   finishWorkerRun,
   createArtifact,
   findApprovedApplications,
+  updateJobAvailability,
   updateApplicationStatus,
   insertApplicationStep,
 } = require('./lib/repository');
@@ -76,6 +77,11 @@ async function main() {
 
       const submission = await submitEasyApply(application, application, { headed: false });
       await withTransaction(async (client) => {
+        await updateJobAvailability(client, application.job_id, {
+          isActive: submission.jobActive !== false,
+          reason: submission.inactiveReason || submission.reason || null,
+        });
+
         if (submission.artifacts?.screenshotPath) {
           await createArtifact(client, {
             entityType: 'application',
@@ -119,6 +125,29 @@ async function main() {
             { reason: submission.reason },
           );
           summary.submitted += 1;
+          return;
+        }
+
+        if (submission.status === 'skipped' && submission.errorClass === 'inactive') {
+          await updateApplicationStatus(client, application.id, {
+            status: APPLICATION_STATUS.SKIPPED,
+            approvalState: APPROVAL_STATE.NONE,
+            workerRunId: workerRun.id,
+            markSubmissionAttempted: true,
+            lastError: submission.reason,
+          });
+          await insertApplicationStep(
+            client,
+            application.id,
+            workerRun.id,
+            STEP_NAME.SUBMIT,
+            APPLICATION_STATUS.SKIPPED,
+            {
+              reason: submission.reason,
+              errorClass: submission.errorClass,
+            },
+          );
+          summary.failed += 1;
           return;
         }
 

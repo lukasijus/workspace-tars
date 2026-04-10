@@ -143,6 +143,23 @@ async function upsertJob(client, job, workerRunId, dedupeKey) {
   return result.rows[0];
 }
 
+async function updateJobAvailability(client, jobId, params) {
+  const isActive = params.isActive !== false;
+  const result = await client.query(
+    `UPDATE jobs
+    SET is_active = $2,
+        inactive_reason = CASE WHEN $2 THEN NULL ELSE $3 END,
+        inactive_detected_at = CASE
+          WHEN $2 THEN NULL
+          ELSE COALESCE(inactive_detected_at, NOW())
+        END
+    WHERE id = $1
+    RETURNING *`,
+    [jobId, isActive, params.reason || null],
+  );
+  return result.rows[0];
+}
+
 async function insertJobRun(client, jobId, workerRunId, job, summary = {}) {
   const result = await client.query(
     `INSERT INTO job_runs (
@@ -332,12 +349,23 @@ async function findApplicationsForApproval(client, limit = 50) {
       jobs.title,
       jobs.location,
       jobs.source_url,
+      jobs.is_active,
+      jobs.inactive_reason,
       approvals.actor AS approval_actor,
-      approvals.reason AS approval_reason
+      approvals.reason AS approval_reason,
+      latest_step.details ->> 'reason' AS latest_step_reason
     FROM applications
     JOIN jobs ON jobs.id = applications.job_id
     LEFT JOIN approvals ON approvals.application_id = applications.id
+    LEFT JOIN LATERAL (
+      SELECT details
+      FROM application_steps
+      WHERE application_id = applications.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_step ON TRUE
     WHERE applications.status = $1
+      AND COALESCE(jobs.is_active, true) = true
     ORDER BY jobs.latest_fit_score DESC, jobs.latest_seen_at DESC
     LIMIT $2`,
     [APPLICATION_STATUS.PENDING_APPROVAL, limit],
@@ -352,10 +380,13 @@ async function findApprovedApplications(client, limit = 20) {
       jobs.company,
       jobs.title,
       jobs.location,
-      jobs.source_url
+      jobs.source_url,
+      jobs.is_active,
+      jobs.inactive_reason
     FROM applications
     JOIN jobs ON jobs.id = applications.job_id
     WHERE applications.status = $1
+      AND COALESCE(jobs.is_active, true) = true
     ORDER BY applications.updated_at ASC
     LIMIT $2`,
     [APPLICATION_STATUS.APPROVED, limit],
@@ -375,6 +406,9 @@ async function fetchApplicationDetail(client, applicationId) {
       jobs.latest_fit_score,
       jobs.matched_strong,
       jobs.matched_bonus,
+      jobs.is_active,
+      jobs.inactive_reason,
+      jobs.inactive_detected_at,
       approvals.actor AS approval_actor,
       approvals.reason AS approval_reason
     FROM applications
@@ -481,6 +515,7 @@ module.exports = {
   finishWorkerRun,
   createArtifact,
   upsertJob,
+  updateJobAvailability,
   insertJobRun,
   upsertApplication,
   updateApplicationStatus,

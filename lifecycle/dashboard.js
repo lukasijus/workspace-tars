@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
+const fs = require('fs');
 const http = require('http');
+const path = require('path');
 const { URL, URLSearchParams } = require('url');
 const { applyMigrations, closePool, query, withTransaction } = require('./lib/db');
 const { config } = require('./lib/config');
@@ -32,9 +34,41 @@ async function fetchApplicationsByStatus(status, limit = 20) {
       jobs.company,
       jobs.title,
       jobs.location,
-      jobs.source_url
+      jobs.source_url,
+      jobs.is_active,
+      jobs.inactive_reason,
+      latest_step.details ->> 'reason' AS latest_step_reason,
+      latest_image.id AS latest_image_artifact_id,
+      latest_image.file_path AS latest_image_path,
+      latest_html.id AS latest_html_artifact_id,
+      latest_html.file_path AS latest_html_path
     FROM applications
     JOIN jobs ON jobs.id = applications.job_id
+    LEFT JOIN LATERAL (
+      SELECT details
+      FROM application_steps
+      WHERE application_id = applications.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_step ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT id, file_path
+      FROM artifacts
+      WHERE entity_type = 'application'
+        AND entity_id = applications.id
+        AND kind IN ('submission_screenshot', 'discovery_screenshot')
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_image ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT id, file_path
+      FROM artifacts
+      WHERE entity_type = 'application'
+        AND entity_id = applications.id
+        AND kind IN ('submission_html', 'discovery_html')
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_html ON TRUE
     WHERE applications.status = $1
     ORDER BY applications.updated_at DESC
     LIMIT $2`,
@@ -49,14 +83,84 @@ async function fetchRecentApplications(limit = 25) {
       applications.*,
       jobs.company,
       jobs.title,
-      jobs.location
+      jobs.location,
+      jobs.source_url,
+      jobs.is_active,
+      jobs.inactive_reason,
+      latest_step.details ->> 'reason' AS latest_step_reason,
+      latest_image.id AS latest_image_artifact_id,
+      latest_image.file_path AS latest_image_path,
+      latest_html.id AS latest_html_artifact_id,
+      latest_html.file_path AS latest_html_path
     FROM applications
     JOIN jobs ON jobs.id = applications.job_id
+    LEFT JOIN LATERAL (
+      SELECT details
+      FROM application_steps
+      WHERE application_id = applications.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_step ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT id, file_path
+      FROM artifacts
+      WHERE entity_type = 'application'
+        AND entity_id = applications.id
+        AND kind IN ('submission_screenshot', 'discovery_screenshot')
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_image ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT id, file_path
+      FROM artifacts
+      WHERE entity_type = 'application'
+        AND entity_id = applications.id
+        AND kind IN ('submission_html', 'discovery_html')
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_html ON TRUE
     ORDER BY applications.updated_at DESC
     LIMIT $1`,
     [limit],
   );
   return result.rows;
+}
+
+function summarizeRowReason(row) {
+  if (row.is_active === false && row.inactive_reason) {
+    return row.inactive_reason;
+  }
+  return row.last_error || row.draft_payload?.reason || row.latest_step_reason || '';
+}
+
+function truncateText(value, max = 140) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+function slugFromPath(filePath) {
+  if (!filePath) return '';
+  return path.basename(filePath);
+}
+
+function renderArtifactActions(row) {
+  const parts = [];
+  if (row.latest_image_artifact_id) {
+    parts.push(`<a class="action-pill" href="/artifacts/${row.latest_image_artifact_id}" target="_blank" rel="noreferrer">Snapshot</a>`);
+  }
+  if (row.latest_html_artifact_id) {
+    parts.push(`<a class="action-pill" href="/artifacts/${row.latest_html_artifact_id}" target="_blank" rel="noreferrer">HTML</a>`);
+  }
+  parts.push(`<a class="action-pill" href="/applications/${row.id}">Inspect</a>`);
+  return parts.join('');
+}
+
+function renderSnapshotThumb(row) {
+  if (!row.latest_image_artifact_id) return '';
+  return `<a class="thumb-link" href="/artifacts/${row.latest_image_artifact_id}" target="_blank" rel="noreferrer" title="${escapeHtml(slugFromPath(row.latest_image_path))}">
+    <img class="thumb" src="/artifacts/${row.latest_image_artifact_id}" alt="Latest workflow snapshot for application ${row.id}" />
+  </a>`;
 }
 
 function renderApplicationTable(title, rows, extraColumn) {
@@ -92,17 +196,43 @@ function renderLink(href, label) {
 
 function renderNeedsHumanInputDetails(row) {
   const parts = [];
-  const reason = row.last_error || row.draft_payload?.reason || '';
+  const reason = summarizeRowReason(row);
   if (reason) {
-    parts.push(`<div>${escapeHtml(reason)}</div>`);
+    parts.push(`<div class="detail-summary">${escapeHtml(truncateText(reason, 120))}</div>`);
   }
+  if (row.is_active === false) {
+    parts.push(`<div class="detail-meta"><strong>Inactive</strong>: ${escapeHtml(row.inactive_reason || 'Employer is no longer accepting applications')}</div>`);
+  }
+  parts.push(renderSnapshotThumb(row));
   if (row.external_apply_url) {
-    parts.push(`<div>${renderLink(row.external_apply_url, 'Open application')}</div>`);
+    parts.push(`<div class="action-row">${renderLink(row.external_apply_url, 'Open application')}</div>`);
   } else if (row.source_url) {
-    parts.push(`<div>${renderLink(row.source_url, 'Open job')}</div>`);
+    parts.push(`<div class="action-row">${renderLink(row.source_url, 'Open job')}</div>`);
   }
-  parts.push(`<div><form class="inline" method="post" action="/applications/${row.id}/retry-discovery"><button type="submit">Retry discovery</button></form></div>`);
-  parts.push(`<div><a href="/applications/${row.id}">Inspect</a></div>`);
+  if (row.is_active !== false) {
+    parts.push(`<div class="action-row"><form class="inline" method="post" action="/applications/${row.id}/retry-discovery"><button type="submit">Retry discovery</button></form></div>`);
+  }
+  parts.push(`<div class="action-row">${renderArtifactActions(row)}</div>`);
+  return parts.join('');
+}
+
+function renderRecentApplicationDetails(row) {
+  const parts = [];
+  if (row.flow_type) {
+    parts.push(`<div class="flow-chip">${escapeHtml(row.flow_type)}</div>`);
+  }
+  const reason = summarizeRowReason(row);
+  if (reason) {
+    parts.push(`<div class="detail-summary muted">${escapeHtml(truncateText(reason, 120))}</div>`);
+  }
+  if (row.is_active === false) {
+    parts.push(`<div class="detail-meta"><strong>Inactive</strong>: ${escapeHtml(row.inactive_reason || 'Employer closed the role')}</div>`);
+  }
+  if (row.status === APPLICATION_STATUS.SUBMITTED && row.submitted_at) {
+    parts.push(`<div class="detail-meta">Submitted: ${escapeHtml(row.submitted_at)}</div>`);
+  }
+  parts.push(renderSnapshotThumb(row));
+  parts.push(`<div class="action-row">${renderArtifactActions(row)}</div>`);
   return parts.join('');
 }
 
@@ -151,20 +281,44 @@ function layout(title, body) {
     <meta charset="utf-8" />
     <title>${escapeHtml(title)}</title>
     <style>
-      body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f7f8fa; color: #111827; }
-      h1, h2, h3 { margin-top: 0; }
+      :root {
+        --bg: #f3f5f8;
+        --panel: #ffffff;
+        --line: #e3e8ef;
+        --text: #18212f;
+        --muted: #667085;
+        --accent: #1d4ed8;
+        --chip: #eef2ff;
+        --success: #e8f7eb;
+        --warn: #fff4db;
+        --danger: #fee8e8;
+      }
+      body { font-family: "Inter", "Segoe UI", sans-serif; margin: 0; padding: 24px; background: radial-gradient(circle at top left, #fdfefe, var(--bg) 40%); color: var(--text); }
+      h1, h2, h3 { margin-top: 0; letter-spacing: -0.02em; }
+      section { margin-bottom: 20px; }
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
-      .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; }
-      table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; }
-      th, td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }
-      th { background: #f3f4f6; }
-      a { color: #1d4ed8; text-decoration: none; }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04); }
+      table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04); }
+      th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
+      th { background: #f8fafc; color: #475467; font-weight: 600; }
+      tr:last-child td { border-bottom: none; }
+      td:last-child { min-width: 260px; }
+      a { color: var(--accent); text-decoration: none; }
       pre { background: #111827; color: #f9fafb; padding: 12px; border-radius: 8px; overflow: auto; }
       form.inline { display: inline-block; margin-right: 8px; }
-      button { border: 1px solid #d1d5db; background: #fff; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
-      button.approve { background: #dcfce7; }
-      button.reject { background: #fee2e2; }
-      .muted { color: #6b7280; }
+      button { border: 1px solid #d1d5db; background: #fff; padding: 6px 10px; border-radius: 999px; cursor: pointer; font-size: 12px; }
+      button.approve { background: var(--success); }
+      button.reject { background: var(--danger); }
+      .muted { color: var(--muted); }
+      .detail-summary { font-weight: 500; margin-bottom: 6px; }
+      .detail-meta { color: var(--muted); margin-bottom: 6px; }
+      .action-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+      .action-pill { display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 999px; background: var(--chip); color: var(--accent); font-size: 12px; }
+      .flow-chip { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; background: #eef2ff; color: #4338ca; font-size: 12px; margin-bottom: 6px; }
+      .thumb-link { display: inline-block; margin: 4px 0 6px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: #f8fafc; }
+      .thumb { display: block; width: 112px; height: 72px; object-fit: cover; }
+      .hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 18px; }
+      .hero p { margin: 0; max-width: 720px; }
     </style>
   </head>
   <body>
@@ -190,13 +344,50 @@ async function fetchApplicationRow(applicationId) {
       jobs.company,
       jobs.title,
       jobs.location,
-      jobs.source_url
+      jobs.source_url,
+      jobs.is_active,
+      jobs.inactive_reason
     FROM applications
     JOIN jobs ON jobs.id = applications.job_id
     WHERE applications.id = $1`,
     [applicationId],
   );
   return result.rows[0] || null;
+}
+
+async function fetchArtifactRow(artifactId) {
+  const result = await query(
+    `SELECT *
+    FROM artifacts
+    WHERE id = $1`,
+    [artifactId],
+  );
+  return result.rows[0] || null;
+}
+
+function inferMimeType(filePath, fallback = 'application/octet-stream') {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.html') return 'text/html; charset=utf-8';
+  if (ext === '.pdf') return 'application/pdf';
+  if (ext === '.json') return 'application/json; charset=utf-8';
+  return fallback;
+}
+
+function sendFile(response, artifact) {
+  const filePath = artifact.file_path;
+  if (!filePath || !fs.existsSync(filePath)) {
+    sendHtml(response, layout('Artifact missing', '<h1>Artifact missing</h1>'), 404);
+    return;
+  }
+
+  response.writeHead(200, {
+    'Content-Type': artifact.mime_type || inferMimeType(filePath),
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'no-store',
+  });
+  fs.createReadStream(filePath).pipe(response);
 }
 
 async function parseFormBody(request) {
@@ -229,8 +420,12 @@ async function renderHome() {
   }).map(([label, value]) => `<div class="card"><div class="muted">${escapeHtml(label)}</div><div style="font-size:28px;font-weight:700;">${value}</div></div>`).join('');
 
   return layout('Tars Lifecycle Dashboard', `
-    <h1>Tars Lifecycle Dashboard</h1>
-    <p class="muted">Local operator surface for pending approvals, recent activity, and worker health.</p>
+    <div class="hero">
+      <div>
+        <h1>Tars Lifecycle Dashboard</h1>
+        <p class="muted">Local operator surface for approvals, latest workflow snapshots, and application health.</p>
+      </div>
+    </div>
     <div class="grid">${statsCards}</div>
     ${renderApplicationTable('Pending approval', pending, (row) => `
       <form class="inline" method="post" action="/applications/${row.id}/approve">
@@ -241,7 +436,7 @@ async function renderHome() {
       </form>
     `)}
     ${renderApplicationTable('Needs human input', needsHumanInput, (row) => renderNeedsHumanInputDetails(row))}
-    ${renderApplicationTable('Recent applications', recent, (row) => escapeHtml(row.flow_type || ''))}
+    ${renderApplicationTable('Recent applications', recent, (row) => renderRecentApplicationDetails(row))}
   `);
 }
 
@@ -297,6 +492,16 @@ async function handleRetryDiscovery(applicationId, response) {
     return;
   }
 
+  if (current.is_active === false) {
+    sendHtml(response, layout('Retry blocked', `
+      <p><a href="/applications/${applicationId}">← application</a></p>
+      <h1>Retry blocked</h1>
+      <p>This job is currently marked <strong>inactive</strong>.</p>
+      <p>${escapeHtml(current.inactive_reason || 'Employer is no longer accepting applications.')}</p>
+    `), 409);
+    return;
+  }
+
   const discovery = await discoverApplicationFlow({
     jobId: current.source_job_id,
     title: current.title,
@@ -319,6 +524,18 @@ async function handleRetryDiscovery(applicationId, response) {
       lastError: outcome.status === APPLICATION_STATUS.FAILED ? discovery.reason : null,
       workerRunId: null,
     });
+
+    await client.query(
+      `UPDATE jobs
+      SET is_active = $2,
+          inactive_reason = CASE WHEN $2 THEN NULL ELSE $3 END,
+          inactive_detected_at = CASE
+            WHEN $2 THEN NULL
+            ELSE COALESCE(inactive_detected_at, NOW())
+          END
+      WHERE id = $1`,
+      [current.job_id, discovery.jobActive !== false, discovery.inactiveReason || discovery.reason || null],
+    );
 
     await insertApplicationStep(
       client,
@@ -389,6 +606,17 @@ async function handleRetryDiscovery(applicationId, response) {
 async function requestHandler(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
   const match = url.pathname.match(/^\/applications\/(\d+)(?:\/(approve|reject|retry-discovery))?$/);
+  const artifactMatch = url.pathname.match(/^\/artifacts\/(\d+)$/);
+
+  if (artifactMatch && request.method === 'GET') {
+    const artifact = await fetchArtifactRow(Number(artifactMatch[1]));
+    if (!artifact) {
+      sendHtml(response, layout('Artifact not found', '<h1>Artifact not found</h1>'), 404);
+      return;
+    }
+    sendFile(response, artifact);
+    return;
+  }
 
   if (request.method === 'GET' && url.pathname === '/api/stats') {
     const stats = await fetchDashboardStats({ query });
@@ -416,6 +644,12 @@ async function requestHandler(request, response) {
       sendHtml(response, layout('Not found', '<h1>Not found</h1>'), 404);
       return;
     }
+    const latestImageArtifact = detail.artifacts.find((artifact) =>
+      ['submission_screenshot', 'discovery_screenshot'].includes(artifact.kind),
+    );
+    const latestHtmlArtifact = detail.artifacts.find((artifact) =>
+      ['submission_html', 'discovery_html'].includes(artifact.kind),
+    );
     const actionButtons = detail.application.status === APPLICATION_STATUS.PENDING_APPROVAL
       ? `
       <form class="inline" method="post" action="/applications/${detail.application.id}/approve">
@@ -425,7 +659,9 @@ async function requestHandler(request, response) {
         <button class="reject" type="submit">Reject</button>
       </form>`
       : '';
-    const retryButton = `
+    const retryButton = detail.application.is_active === false
+      ? ''
+      : `
       <form class="inline" method="post" action="/applications/${detail.application.id}/retry-discovery">
         <button type="submit">Retry discovery</button>
       </form>`;
@@ -437,16 +673,20 @@ async function requestHandler(request, response) {
       <p><strong>Submitted at:</strong> ${escapeHtml(detail.application.submitted_at || 'n/a')}</p>
       <p><strong>Submission attempted at:</strong> ${escapeHtml(detail.application.submission_attempted_at || 'n/a')}</p>
       <p><strong>Flow:</strong> ${escapeHtml(detail.application.flow_type)}</p>
+      <p><strong>Job active:</strong> ${detail.application.is_active === false ? 'no' : 'yes'}</p>
+      <p><strong>Inactive reason:</strong> ${escapeHtml(detail.application.inactive_reason || 'n/a')}</p>
       <p><strong>Location:</strong> ${escapeHtml(detail.application.location || '')}</p>
       <p><strong>Source:</strong> ${detail.application.source_url ? `<a href="${escapeHtml(detail.application.source_url)}">${escapeHtml(detail.application.source_url)}</a>` : 'n/a'}</p>
       <p><strong>External apply URL:</strong> ${detail.application.external_apply_url ? `<a href="${escapeHtml(detail.application.external_apply_url)}">${escapeHtml(detail.application.external_apply_url)}</a>` : 'n/a'}</p>
       <p><strong>CV:</strong> ${escapeHtml(detail.application.cv_variant_file_name || 'n/a')}</p>
-      <p><strong>Reason:</strong> ${escapeHtml(detail.application.last_error || detail.application.draft_payload?.reason || 'n/a')}</p>
+      <p><strong>Reason:</strong> ${escapeHtml(detail.application.inactive_reason || detail.application.last_error || detail.application.draft_payload?.reason || 'n/a')}</p>
       ${actionButtons}
       ${retryButton}
+      ${latestImageArtifact ? `<h2>Latest snapshot</h2><a class="thumb-link" href="/artifacts/${latestImageArtifact.id}" target="_blank" rel="noreferrer"><img class="thumb" src="/artifacts/${latestImageArtifact.id}" alt="Latest snapshot" style="width:320px;height:200px;" /></a>` : ''}
+      ${latestHtmlArtifact ? `<p><a class="action-pill" href="/artifacts/${latestHtmlArtifact.id}" target="_blank" rel="noreferrer">Open latest HTML</a></p>` : ''}
       <h2>Artifacts</h2>
       <ul>
-        ${detail.artifacts.map((artifact) => `<li>${escapeHtml(artifact.kind)} — ${escapeHtml(artifact.file_path)}</li>`).join('') || '<li>None</li>'}
+        ${detail.artifacts.map((artifact) => `<li><a href="/artifacts/${artifact.id}" target="_blank" rel="noreferrer">${escapeHtml(artifact.kind)}</a> <span class="muted">(${escapeHtml(path.basename(artifact.file_path || ''))})</span></li>`).join('') || '<li>None</li>'}
       </ul>
       <h2>Steps</h2>
       <pre>${escapeHtml(JSON.stringify(detail.steps, null, 2))}</pre>

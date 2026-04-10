@@ -67,6 +67,47 @@ async function extractCompanyApplyUrl(page) {
   return match ? decodeSerializedUrl(match[1]) : null;
 }
 
+async function inspectJobAvailability(page) {
+  return page.evaluate(() => {
+    const text = String(document.body?.innerText || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const reasonMap = [
+      {
+        pattern: /no longer accepting applications/i,
+        reason: "No longer accepting applications",
+      },
+      {
+        pattern: /applications closed/i,
+        reason: "Applications closed",
+      },
+      {
+        pattern: /this job is closed/i,
+        reason: "This job is closed",
+      },
+      {
+        pattern: /job posting is no longer available/i,
+        reason: "Job posting is no longer available",
+      },
+      {
+        pattern: /position has been filled/i,
+        reason: "Position has been filled",
+      },
+    ];
+
+    const matched = reasonMap.find(({ pattern }) => pattern.test(text));
+    if (!matched) {
+      return { isActive: true, reason: null };
+    }
+
+    return {
+      isActive: false,
+      reason: matched.reason,
+    };
+  });
+}
+
 async function findVisibleApplyButton(page, pattern) {
   const buttons = page.locator(
     "button#jobs-apply-button-id, button[data-live-test-job-apply-button]",
@@ -537,6 +578,22 @@ async function discoverApplicationFlow(job, options = {}) {
       };
     }
 
+    const availability = await inspectJobAvailability(page);
+    if (availability.isActive === false) {
+      artifacts = await savePageArtifacts(page, job.jobId || job.title);
+      return {
+        ok: true,
+        loginState,
+        readiness: "blocked",
+        flowType: FLOW_TYPE.NO_APPLY_PATH,
+        reason: availability.reason,
+        fields: [],
+        artifacts,
+        jobActive: false,
+        inactiveReason: availability.reason,
+      };
+    }
+
     const primaryApply = await inspectPrimaryApply(page);
     artifacts = await savePageArtifacts(page, job.jobId || job.title);
 
@@ -549,6 +606,7 @@ async function discoverApplicationFlow(job, options = {}) {
         reason: "No apply button found on the job page",
         fields: [],
         artifacts,
+        jobActive: true,
       };
     }
 
@@ -590,6 +648,7 @@ async function discoverApplicationFlow(job, options = {}) {
         fields: annotatedFields,
         buttons: state?.buttons || [],
         artifacts,
+        jobActive: true,
       };
     }
 
@@ -606,6 +665,7 @@ async function discoverApplicationFlow(job, options = {}) {
       externalUrl,
       fields: [],
       artifacts,
+      jobActive: true,
     };
   } catch (error) {
     return {
@@ -616,6 +676,7 @@ async function discoverApplicationFlow(job, options = {}) {
       reason: error.message,
       fields: [],
       artifacts,
+      jobActive: true,
     };
   } finally {
     if (context) {
@@ -649,6 +710,24 @@ async function submitEasyApply(job, application, options = {}) {
         errorClass: "auth",
         reason: `LinkedIn session is not ready (${loginState})`,
         artifacts,
+        jobActive: true,
+      };
+    }
+
+    const availability = await inspectJobAvailability(page);
+    if (availability.isActive === false) {
+      artifacts = await savePageArtifacts(
+        page,
+        `submit-inactive-${job.jobId || job.title}`,
+      );
+      return {
+        ok: false,
+        status: "skipped",
+        errorClass: "inactive",
+        reason: availability.reason,
+        artifacts,
+        jobActive: false,
+        inactiveReason: availability.reason,
       };
     }
 
@@ -657,16 +736,22 @@ async function submitEasyApply(job, application, options = {}) {
       /easy apply|continue applying/i,
     );
     if (!easyButton) {
+      const refreshedAvailability = await inspectJobAvailability(page);
       artifacts = await savePageArtifacts(
         page,
         `submit-missing-${job.jobId || job.title}`,
       );
       return {
         ok: false,
-        status: "failed",
-        errorClass: "flow",
-        reason: "Easy Apply button not available at submission time",
+        status: refreshedAvailability.isActive === false ? "skipped" : "failed",
+        errorClass: refreshedAvailability.isActive === false ? "inactive" : "flow",
+        reason:
+          refreshedAvailability.isActive === false
+            ? refreshedAvailability.reason
+            : "Easy Apply button not available at submission time",
         artifacts,
+        jobActive: refreshedAvailability.isActive !== false,
+        inactiveReason: refreshedAvailability.reason || null,
       };
     }
 
@@ -706,6 +791,7 @@ async function submitEasyApply(job, application, options = {}) {
           reason: "Application requires additional answers before submission",
           fields: annotatedFields,
           artifacts,
+          jobActive: true,
         };
       }
 
@@ -724,6 +810,7 @@ async function submitEasyApply(job, application, options = {}) {
           status: "submitted",
           reason: "LinkedIn Easy Apply submitted",
           artifacts,
+          jobActive: true,
         };
       }
 
@@ -747,6 +834,7 @@ async function submitEasyApply(job, application, options = {}) {
         errorClass: "flow",
         reason: "Could not find a supported next/review/submit button",
         artifacts,
+        jobActive: true,
       };
     }
 
@@ -761,6 +849,7 @@ async function submitEasyApply(job, application, options = {}) {
       errorClass: "timeout",
       reason: "Exceeded maximum Easy Apply steps before submission",
       artifacts,
+      jobActive: true,
     };
   } catch (error) {
     return {
@@ -769,6 +858,7 @@ async function submitEasyApply(job, application, options = {}) {
       errorClass: isBrowserClosedError(error) ? "browser_closed" : "exception",
       reason: error.message,
       artifacts,
+      jobActive: true,
     };
   } finally {
     if (context) {
