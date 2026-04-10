@@ -144,29 +144,17 @@ function slugFromPath(filePath) {
   return path.basename(filePath);
 }
 
-function renderArtifactActions(row) {
-  const parts = [];
-  if (row.latest_image_artifact_id) {
-    parts.push(`<a class="action-pill" href="/artifacts/${row.latest_image_artifact_id}" target="_blank" rel="noreferrer">Snapshot</a>`);
-  }
-  if (row.latest_html_artifact_id) {
-    parts.push(`<a class="action-pill" href="/artifacts/${row.latest_html_artifact_id}" target="_blank" rel="noreferrer">HTML</a>`);
-  }
-  parts.push(`<a class="action-pill" href="/applications/${row.id}">Inspect</a>`);
-  return parts.join('');
-}
-
 function renderSnapshotThumb(row) {
   if (!row.latest_image_artifact_id) return '';
-  return `<a class="thumb-link" href="/artifacts/${row.latest_image_artifact_id}" target="_blank" rel="noreferrer" title="${escapeHtml(slugFromPath(row.latest_image_path))}">
+  return `<div class="thumb-link" title="${escapeHtml(slugFromPath(row.latest_image_path))}">
     <img class="thumb" src="/artifacts/${row.latest_image_artifact_id}" alt="Latest workflow snapshot for application ${row.id}" />
-  </a>`;
+  </div>`;
 }
 
 function renderApplicationTable(title, rows, extraColumn) {
   const body = rows.length
-    ? rows.map((row) => `<tr>
-        <td><a href="/applications/${row.id}">${row.company || ''} — ${row.title || ''}</a></td>
+    ? rows.map((row) => `<tr class="clickable-row" data-href="/applications/${row.id}" tabindex="0" role="link" aria-label="Open ${escapeHtml(`${row.company || ''} ${row.title || ''}`)}">
+        <td>${escapeHtml(`${row.company || ''} — ${row.title || ''}`)}</td>
         <td>${escapeHtml(row.location || '')}</td>
         <td>${escapeHtml(row.status || '')}</td>
         <td>${extraColumn ? extraColumn(row) : ''}</td>
@@ -196,6 +184,9 @@ function renderLink(href, label) {
 
 function renderNeedsHumanInputDetails(row) {
   const parts = [];
+  if (row.flow_type) {
+    parts.push(`<div class="flow-chip">${escapeHtml(row.flow_type)}</div>`);
+  }
   const reason = summarizeRowReason(row);
   if (reason) {
     parts.push(`<div class="detail-summary">${escapeHtml(truncateText(reason, 120))}</div>`);
@@ -204,15 +195,20 @@ function renderNeedsHumanInputDetails(row) {
     parts.push(`<div class="detail-meta"><strong>Inactive</strong>: ${escapeHtml(row.inactive_reason || 'Employer is no longer accepting applications')}</div>`);
   }
   parts.push(renderSnapshotThumb(row));
-  if (row.external_apply_url) {
-    parts.push(`<div class="action-row">${renderLink(row.external_apply_url, 'Open application')}</div>`);
-  } else if (row.source_url) {
-    parts.push(`<div class="action-row">${renderLink(row.source_url, 'Open job')}</div>`);
+  return parts.join('');
+}
+
+function renderPendingApprovalDetails(row) {
+  const parts = [];
+  if (row.flow_type) {
+    parts.push(`<div class="flow-chip">${escapeHtml(row.flow_type)}</div>`);
   }
-  if (row.is_active !== false) {
-    parts.push(`<div class="action-row"><form class="inline" method="post" action="/applications/${row.id}/retry-discovery"><button type="submit">Retry discovery</button></form></div>`);
+  parts.push(`<div class="detail-summary">Ready for approval</div>`);
+  const reason = summarizeRowReason(row);
+  if (reason) {
+    parts.push(`<div class="detail-meta">${escapeHtml(truncateText(reason, 120))}</div>`);
   }
-  parts.push(`<div class="action-row">${renderArtifactActions(row)}</div>`);
+  parts.push(renderSnapshotThumb(row));
   return parts.join('');
 }
 
@@ -232,7 +228,6 @@ function renderRecentApplicationDetails(row) {
     parts.push(`<div class="detail-meta">Submitted: ${escapeHtml(row.submitted_at)}</div>`);
   }
   parts.push(renderSnapshotThumb(row));
-  parts.push(`<div class="action-row">${renderArtifactActions(row)}</div>`);
   return parts.join('');
 }
 
@@ -303,6 +298,9 @@ function layout(title, body) {
       th { background: #f8fafc; color: #475467; font-weight: 600; }
       tr:last-child td { border-bottom: none; }
       td:last-child { min-width: 260px; }
+      .clickable-row { transition: background 120ms ease, transform 120ms ease; }
+      .clickable-row:hover { background: #eef4ff; cursor: pointer; }
+      .clickable-row:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; background: #eff6ff; }
       a { color: var(--accent); text-decoration: none; }
       pre { background: #111827; color: #f9fafb; padding: 12px; border-radius: 8px; overflow: auto; }
       form.inline { display: inline-block; margin-right: 8px; }
@@ -323,6 +321,23 @@ function layout(title, body) {
   </head>
   <body>
     ${body}
+    <script>
+      document.addEventListener('click', (event) => {
+        const row = event.target.closest('.clickable-row');
+        if (!row) return;
+        if (event.target.closest('a, button, input, textarea, select, form')) return;
+        const href = row.getAttribute('data-href');
+        if (href) window.location.href = href;
+      });
+      document.addEventListener('keydown', (event) => {
+        const row = event.target.closest('.clickable-row');
+        if (!row) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        const href = row.getAttribute('data-href');
+        if (href) window.location.href = href;
+      });
+    </script>
   </body>
 </html>`;
 }
@@ -427,14 +442,7 @@ async function renderHome() {
       </div>
     </div>
     <div class="grid">${statsCards}</div>
-    ${renderApplicationTable('Pending approval', pending, (row) => `
-      <form class="inline" method="post" action="/applications/${row.id}/approve">
-        <button class="approve" type="submit">Approve</button>
-      </form>
-      <form class="inline" method="post" action="/applications/${row.id}/reject">
-        <button class="reject" type="submit">Reject</button>
-      </form>
-    `)}
+    ${renderApplicationTable('Pending approval', pending, (row) => renderPendingApprovalDetails(row))}
     ${renderApplicationTable('Needs human input', needsHumanInput, (row) => renderNeedsHumanInputDetails(row))}
     ${renderApplicationTable('Recent applications', recent, (row) => renderRecentApplicationDetails(row))}
   `);
