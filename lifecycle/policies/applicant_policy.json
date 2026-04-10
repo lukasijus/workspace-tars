@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "approval": {
+    "externalAutoApprove": true
+  },
+  "external": {
+    "maxSteps": 8,
+    "maxSameFingerprint": 2,
+    "defaultYesNo": "YES"
+  },
+  "defaults": {
+    "readPrivacyNotice": "YES",
+    "allowFutureRoles": "YES",
+    "personalDataConsent": "YES",
+    "authorizedToWork": "YES",
+    "needVisaSponsorship": "NO",
+    "requireSponsorship": "NO",
+    "willingToRelocate": "YES",
+    "consentToBackgroundCheck": "YES"
+  }
+}

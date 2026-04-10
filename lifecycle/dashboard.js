@@ -14,6 +14,7 @@ const {
   findApplicationsForApproval,
   insertApplicationStep,
   setApprovalState,
+  updateJobAvailability,
   updateApplicationStatus,
 } = require('./lib/repository');
 const { discoverApplicationFlow } = require('./lib/application-discovery');
@@ -130,7 +131,13 @@ function summarizeRowReason(row) {
   if (row.is_active === false && row.inactive_reason) {
     return row.inactive_reason;
   }
-  return row.last_error || row.draft_payload?.reason || row.latest_step_reason || '';
+  return (
+    row.last_error ||
+    row.draft_payload?.reason ||
+    row.draft_payload?.externalStep?.stepTitle ||
+    row.latest_step_reason ||
+    ""
+  );
 }
 
 function truncateText(value, max = 140) {
@@ -186,6 +193,23 @@ function renderNeedsHumanInputDetails(row) {
   const parts = [];
   if (row.flow_type) {
     parts.push(`<div class="flow-chip">${escapeHtml(row.flow_type)}</div>`);
+  }
+  const externalStep = row.draft_payload?.externalStep || null;
+  const unresolvedCount = Array.isArray(row.draft_payload?.unresolvedFields)
+    ? row.draft_payload.unresolvedFields.length
+    : 0;
+  if (externalStep?.providerHint || unresolvedCount) {
+    parts.push(
+      `<div class="detail-meta">${
+        externalStep?.providerHint
+          ? `Provider: ${escapeHtml(externalStep.providerHint)}`
+          : ''
+      }${
+        externalStep?.providerHint && unresolvedCount ? ' · ' : ''
+      }${
+        unresolvedCount ? `${unresolvedCount} unresolved field(s)` : ''
+      }</div>`,
+    );
   }
   const reason = summarizeRowReason(row);
   if (reason) {
@@ -246,10 +270,17 @@ function decideDiscoveryOutcome(discovery) {
     };
   }
 
-  if (
-    discovery.flowType === FLOW_TYPE.EASY_APPLY_NATIVE &&
-    discovery.readiness === 'ready_for_approval'
-  ) {
+  if (discovery.readiness === 'ready_for_approval') {
+    if (
+      discovery.flowType === FLOW_TYPE.EXTERNAL_CUSTOM &&
+      config.applicantPolicy?.approval?.externalAutoApprove
+    ) {
+      return {
+        status: APPLICATION_STATUS.APPROVED,
+        approvalState: APPROVAL_STATE.APPROVED,
+      };
+    }
+
     return {
       status: APPLICATION_STATUS.PENDING_APPROVAL,
       approvalState: APPROVAL_STATE.PENDING,
@@ -317,11 +348,123 @@ function layout(title, body) {
       .thumb { display: block; width: 112px; height: 72px; object-fit: cover; }
       .hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 18px; }
       .hero p { margin: 0; max-width: 720px; }
+      .page-status {
+        position: sticky;
+        top: 12px;
+        z-index: 30;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+        padding: 10px 14px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+        color: var(--text);
+      }
+      .page-status.is-error { border-color: #f5c2c7; background: #fff5f5; color: #991b1b; }
+      .page-status[hidden] { display: none; }
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(29, 78, 216, 0.2);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      button.is-loading {
+        opacity: 0.75;
+        cursor: progress;
+      }
+      button.is-loading .spinner {
+        margin-right: 6px;
+        width: 12px;
+        height: 12px;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
     </style>
   </head>
   <body>
+    <div id="page-status" class="page-status" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="page-status-text">Working…</span>
+    </div>
     ${body}
     <script>
+      const pageStatus = document.getElementById('page-status');
+      const pageStatusText = document.getElementById('page-status-text');
+
+      function setPageStatus(message, isError = false) {
+        if (!pageStatus || !pageStatusText) return;
+        pageStatus.hidden = false;
+        pageStatus.classList.toggle('is-error', Boolean(isError));
+        pageStatusText.textContent = message;
+      }
+
+      function clearPageStatus() {
+        if (!pageStatus) return;
+        pageStatus.hidden = true;
+        pageStatus.classList.remove('is-error');
+      }
+
+      async function submitActionForm(form, submitter) {
+        const originalContent = submitter ? submitter.innerHTML : '';
+        const pendingLabel = form.dataset.pendingLabel || submitter?.dataset.pendingLabel || submitter?.textContent?.trim() || 'Working…';
+
+        if (submitter) {
+          submitter.disabled = true;
+          submitter.classList.add('is-loading');
+          submitter.innerHTML = '<span class="spinner" aria-hidden="true"></span><span>' + pendingLabel + '</span>';
+        }
+        Array.from(form.elements || []).forEach((element) => {
+          if (element !== submitter) element.disabled = true;
+        });
+        setPageStatus(pendingLabel);
+
+        try {
+          const formData = new FormData(form);
+          const payload = new URLSearchParams();
+          formData.forEach((value, key) => {
+            if (typeof value === 'string') payload.append(key, value);
+          });
+          const response = await fetch(form.action, {
+            method: (form.method || 'POST').toUpperCase(),
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+              'X-Requested-With': 'fetch',
+            },
+            body: payload.toString(),
+            redirect: 'follow',
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || 'Action failed');
+          }
+
+          setPageStatus('Done. Refreshing…');
+          if (response.redirected && response.url && response.url !== window.location.href) {
+            window.location.assign(response.url);
+            return;
+          }
+          window.location.reload();
+        } catch (error) {
+          setPageStatus('Action failed. Check details and try again.', true);
+          if (submitter) {
+            submitter.disabled = false;
+            submitter.classList.remove('is-loading');
+            submitter.innerHTML = originalContent;
+          }
+          Array.from(form.elements || []).forEach((element) => {
+            element.disabled = false;
+          });
+          console.error(error);
+        }
+      }
+
       document.addEventListener('click', (event) => {
         const row = event.target.closest('.clickable-row');
         if (!row) return;
@@ -336,6 +479,18 @@ function layout(title, body) {
         event.preventDefault();
         const href = row.getAttribute('data-href');
         if (href) window.location.href = href;
+      });
+
+      document.addEventListener('submit', (event) => {
+        const form = event.target.closest('form.js-async-form');
+        if (!form) return;
+        event.preventDefault();
+        if (form.dataset.submitting === 'true') return;
+        form.dataset.submitting = 'true';
+        submitActionForm(form, event.submitter || form.querySelector('button[type="submit"]'))
+          .finally(() => {
+            delete form.dataset.submitting;
+          });
       });
     </script>
   </body>
@@ -514,7 +669,10 @@ async function handleRetryDiscovery(applicationId, response) {
     jobId: current.source_job_id,
     title: current.title,
     link: current.source_url,
-  }, { headed: false });
+  }, {
+    headed: false,
+    application: current,
+  });
   const outcome = decideDiscoveryOutcome(discovery);
 
   await withTransaction(async (client) => {
@@ -527,8 +685,10 @@ async function handleRetryDiscovery(applicationId, response) {
         loginState: discovery.loginState || null,
         buttons: discovery.buttons || [],
         reason: discovery.reason || null,
+        externalStep: discovery.discoveredFields || null,
+        unresolvedFields: discovery.unresolvedFields || [],
       },
-      discoveredFields: discovery.fields || [],
+      discoveredFields: discovery.discoveredFields || discovery.fields || [],
       lastError: outcome.status === APPLICATION_STATUS.FAILED ? discovery.reason : null,
       workerRunId: null,
     });
@@ -557,6 +717,8 @@ async function handleRetryDiscovery(applicationId, response) {
         readiness: discovery.readiness,
         reason: discovery.reason,
         externalUrl: discovery.externalUrl || null,
+        unresolvedFields: discovery.unresolvedFields || [],
+        externalStep: discovery.discoveredFields || null,
       },
     );
 
@@ -605,6 +767,80 @@ async function handleRetryDiscovery(applicationId, response) {
         },
       );
     }
+
+    if (outcome.approvalState === APPROVAL_STATE.APPROVED) {
+      await setApprovalState(client, updated.id, {
+        state: APPROVAL_STATE.APPROVED,
+        actor: 'dashboard_retry',
+        reason: 'Discovery retry auto-approved by applicant policy',
+      });
+      await insertApplicationStep(
+        client,
+        updated.id,
+        null,
+        'approval',
+        APPLICATION_STATUS.APPROVED,
+        {
+          actor: 'dashboard_retry',
+          reason: 'Discovery retry auto-approved by applicant policy',
+        },
+      );
+    }
+  });
+
+  response.writeHead(303, { Location: `/applications/${applicationId}` });
+  response.end();
+}
+
+async function handleMarkInactive(applicationId, request, response) {
+  const form = await parseFormBody(request).catch(() => new URLSearchParams());
+  const reason =
+    form.get('reason')?.trim() || 'Manually marked inactive from dashboard';
+  const current = await fetchApplicationRow(applicationId);
+
+  if (!current) {
+    sendHtml(response, layout('Not found', '<h1>Not found</h1>'), 404);
+    return;
+  }
+
+  await withTransaction(async (client) => {
+    await updateJobAvailability(client, current.job_id, {
+      isActive: false,
+      reason,
+    });
+
+    const nextStatus =
+      current.status === APPLICATION_STATUS.SUBMITTED
+        ? APPLICATION_STATUS.SUBMITTED
+        : APPLICATION_STATUS.SKIPPED;
+    const nextApprovalState =
+      current.status === APPLICATION_STATUS.SUBMITTED
+        ? current.approval_state
+        : APPROVAL_STATE.NONE;
+
+    await updateApplicationStatus(client, applicationId, {
+      status: nextStatus,
+      approvalState: nextApprovalState,
+      lastError: current.status === APPLICATION_STATUS.SUBMITTED ? current.last_error : reason,
+      draftPayload: {
+        reason,
+        manuallyMarkedInactive: true,
+      },
+      workerRunId: null,
+    });
+
+    await insertApplicationStep(
+      client,
+      applicationId,
+      null,
+      'operator',
+      nextStatus,
+      {
+        actor: 'dashboard',
+        action: 'mark_inactive',
+        reason,
+      },
+    );
   });
 
   response.writeHead(303, { Location: `/applications/${applicationId}` });
@@ -613,7 +849,7 @@ async function handleRetryDiscovery(applicationId, response) {
 
 async function requestHandler(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-  const match = url.pathname.match(/^\/applications\/(\d+)(?:\/(approve|reject|retry-discovery))?$/);
+  const match = url.pathname.match(/^\/applications\/(\d+)(?:\/(approve|reject|retry-discovery|mark-inactive))?$/);
   const artifactMatch = url.pathname.match(/^\/artifacts\/(\d+)$/);
 
   if (artifactMatch && request.method === 'GET') {
@@ -660,19 +896,28 @@ async function requestHandler(request, response) {
     );
     const actionButtons = detail.application.status === APPLICATION_STATUS.PENDING_APPROVAL
       ? `
-      <form class="inline" method="post" action="/applications/${detail.application.id}/approve">
+      <form class="inline js-async-form" method="post" action="/applications/${detail.application.id}/approve" data-pending-label="Approving…">
         <button class="approve" type="submit">Approve</button>
       </form>
-      <form class="inline" method="post" action="/applications/${detail.application.id}/reject">
+      <form class="inline js-async-form" method="post" action="/applications/${detail.application.id}/reject" data-pending-label="Rejecting…">
         <button class="reject" type="submit">Reject</button>
       </form>`
       : '';
     const retryButton = detail.application.is_active === false
       ? ''
       : `
-      <form class="inline" method="post" action="/applications/${detail.application.id}/retry-discovery">
+      <form class="inline js-async-form" method="post" action="/applications/${detail.application.id}/retry-discovery" data-pending-label="Retrying discovery…">
         <button type="submit">Retry discovery</button>
       </form>`;
+    const inactiveButton = detail.application.is_active === false
+      ? ''
+      : `
+      <form class="inline js-async-form" method="post" action="/applications/${detail.application.id}/mark-inactive" data-pending-label="Marking inactive…">
+        <input type="text" name="reason" placeholder="Reason for inactive flag" aria-label="Reason for inactive flag" />
+        <button class="reject" type="submit">Mark inactive</button>
+      </form>`;
+    const externalStep = detail.application.draft_payload?.externalStep || null;
+    const unresolvedFields = detail.application.draft_payload?.unresolvedFields || [];
     sendHtml(response, layout(`Application ${match[1]}`, `
       <p><a href="/">← dashboard</a></p>
       <h1>${escapeHtml(detail.application.company || '')} — ${escapeHtml(detail.application.title || '')}</h1>
@@ -690,6 +935,21 @@ async function requestHandler(request, response) {
       <p><strong>Reason:</strong> ${escapeHtml(detail.application.inactive_reason || detail.application.last_error || detail.application.draft_payload?.reason || 'n/a')}</p>
       ${actionButtons}
       ${retryButton}
+      ${inactiveButton}
+      ${externalStep ? `
+        <h2>Latest external step</h2>
+        <pre>${escapeHtml(JSON.stringify({
+          providerHint: externalStep.providerHint,
+          stepTitle: externalStep.stepTitle,
+          url: externalStep.url,
+          unresolvedFields: unresolvedFields.map((field) => ({
+            label: field.label,
+            type: field.type,
+          })),
+          validationErrors: externalStep.validationErrors || [],
+          buttons: externalStep.buttons || [],
+        }, null, 2))}</pre>
+      ` : ''}
       ${latestImageArtifact ? `<h2>Latest snapshot</h2><a class="thumb-link" href="/artifacts/${latestImageArtifact.id}" target="_blank" rel="noreferrer"><img class="thumb" src="/artifacts/${latestImageArtifact.id}" alt="Latest snapshot" style="width:320px;height:200px;" /></a>` : ''}
       ${latestHtmlArtifact ? `<p><a class="action-pill" href="/artifacts/${latestHtmlArtifact.id}" target="_blank" rel="noreferrer">Open latest HTML</a></p>` : ''}
       <h2>Artifacts</h2>
@@ -709,6 +969,10 @@ async function requestHandler(request, response) {
   if (match && request.method === 'POST' && match[2]) {
     if (match[2] === 'retry-discovery') {
       await handleRetryDiscovery(Number(match[1]), response);
+      return;
+    }
+    if (match[2] === 'mark-inactive') {
+      await handleMarkInactive(Number(match[1]), request, response);
       return;
     }
     await handleApprovalAction(Number(match[1]), match[2], request, response);

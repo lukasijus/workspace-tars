@@ -20,6 +20,7 @@ const {
   insertApplicationStep,
 } = require('./lib/repository');
 const { submitEasyApply } = require('./lib/application-discovery');
+const { submitExternalCustom } = require('./lib/external-apply');
 
 async function main() {
   await applyMigrations();
@@ -54,7 +55,12 @@ async function main() {
         applicationId: application.id,
       }));
 
-      if (application.flow_type !== FLOW_TYPE.EASY_APPLY_NATIVE) {
+      let submission;
+      if (application.flow_type === FLOW_TYPE.EASY_APPLY_NATIVE) {
+        submission = await submitEasyApply(application, application, { headed: false });
+      } else if (application.flow_type === FLOW_TYPE.EXTERNAL_CUSTOM) {
+        submission = await submitExternalCustom(application, application, { headed: false });
+      } else {
         await withTransaction(async (client) => {
           await updateApplicationStatus(client, application.id, {
             status: APPLICATION_STATUS.NEEDS_HUMAN_INPUT,
@@ -75,7 +81,6 @@ async function main() {
         continue;
       }
 
-      const submission = await submitEasyApply(application, application, { headed: false });
       await withTransaction(async (client) => {
         await updateJobAvailability(client, application.job_id, {
           isActive: submission.jobActive !== false,
@@ -158,6 +163,10 @@ async function main() {
             workerRunId: workerRun.id,
             markSubmissionAttempted: true,
             lastError: submission.reason,
+            discoveredFields: submission.step || submission.fields || [],
+            draftPayload: {
+              externalStep: submission.step || null,
+            },
           });
           await insertApplicationStep(
             client,
@@ -168,6 +177,7 @@ async function main() {
             {
               reason: submission.reason,
               fields: submission.fields || [],
+              step: submission.step || null,
             },
           );
           summary.needsHumanInput += 1;
@@ -196,6 +206,7 @@ async function main() {
             reason: submission.reason,
             errorClass: submission.errorClass || null,
             retryCount: nextRetryCount,
+            step: submission.step || null,
           },
         );
 

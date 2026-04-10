@@ -73,10 +73,17 @@ function decideApplicationOutcome(discovery) {
     };
   }
 
-  if (
-    discovery.flowType === FLOW_TYPE.EASY_APPLY_NATIVE &&
-    discovery.readiness === 'ready_for_approval'
-  ) {
+  if (discovery.readiness === 'ready_for_approval') {
+    if (
+      discovery.flowType === FLOW_TYPE.EXTERNAL_CUSTOM &&
+      config.applicantPolicy?.approval?.externalAutoApprove
+    ) {
+      return {
+        status: APPLICATION_STATUS.APPROVED,
+        approvalState: APPROVAL_STATE.APPROVED,
+      };
+    }
+
     return {
       status: APPLICATION_STATUS.PENDING_APPROVAL,
       approvalState: APPROVAL_STATE.PENDING,
@@ -305,6 +312,7 @@ async function main() {
 
       const discovery = await discoverApplicationFlow(item.jobPayload, {
         headed: args.headed,
+        application: item.application,
       });
       const outcome = decideApplicationOutcome(discovery);
       discovered.push({
@@ -328,8 +336,10 @@ async function main() {
             loginState: discovery.loginState || null,
             buttons: discovery.buttons || [],
             reason: discovery.reason,
+            externalStep: discovery.discoveredFields || null,
+            unresolvedFields: discovery.unresolvedFields || [],
           },
-          discoveredFields: discovery.fields || [],
+          discoveredFields: discovery.discoveredFields || discovery.fields || [],
           lastError: outcome.status === APPLICATION_STATUS.FAILED ? discovery.reason : null,
           workerRunId: workerRun.id,
         });
@@ -345,6 +355,8 @@ async function main() {
             readiness: discovery.readiness,
             reason: discovery.reason,
             externalUrl: discovery.externalUrl || null,
+            unresolvedFields: discovery.unresolvedFields || [],
+            externalStep: discovery.discoveredFields || null,
           },
         );
 
@@ -387,6 +399,25 @@ async function main() {
             APPLICATION_STATUS.PENDING_APPROVAL,
             {
               actor: 'tars-search-batch',
+            },
+          );
+        }
+
+        if (outcome.approvalState === APPROVAL_STATE.APPROVED) {
+          await setApprovalState(client, updated.id, {
+            state: APPROVAL_STATE.APPROVED,
+            actor: 'tars-search-batch',
+            reason: 'Auto-approved by applicant policy for external submission',
+          });
+          await insertApplicationStep(
+            client,
+            updated.id,
+            workerRun.id,
+            STEP_NAME.APPROVAL,
+            APPLICATION_STATUS.APPROVED,
+            {
+              actor: 'tars-search-batch',
+              reason: 'Auto-approved by applicant policy for external submission',
             },
           );
         }

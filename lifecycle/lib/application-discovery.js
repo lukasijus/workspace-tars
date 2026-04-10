@@ -14,6 +14,7 @@ const {
   isBrowserClosedError,
 } = require("./utils");
 const { FLOW_TYPE } = require("./state");
+const { inspectExternalFlow } = require("./external-apply");
 
 function classifyExternalUrl(targetUrl) {
   if (!targetUrl) return FLOW_TYPE.UNKNOWN;
@@ -655,17 +656,32 @@ async function discoverApplicationFlow(job, options = {}) {
     const externalUrl = primaryApply.href
       ? new URL(primaryApply.href, job.link).toString()
       : await extractCompanyApplyUrl(page);
+    const externalType = classifyExternalUrl(externalUrl);
+    if (externalType !== FLOW_TYPE.EXTERNAL_CUSTOM || !externalUrl) {
+      return {
+        ok: true,
+        loginState,
+        readiness: "needs_human_input",
+        flowType: externalType,
+        reason:
+          "External application flow discovered; manual review still required in v1",
+        externalUrl,
+        fields: [],
+        artifacts,
+        jobActive: true,
+      };
+    }
+
+    const externalDiscovery = await inspectExternalFlow(externalUrl, {
+      headed: Boolean(options.headed),
+      application: options.application || null,
+    });
     return {
-      ok: true,
+      ...externalDiscovery,
       loginState,
-      readiness: "needs_human_input",
-      flowType: classifyExternalUrl(externalUrl),
-      reason:
-        "External application flow discovered; manual review still required in v1",
+      flowType: FLOW_TYPE.EXTERNAL_CUSTOM,
       externalUrl,
-      fields: [],
-      artifacts,
-      jobActive: true,
+      artifacts: externalDiscovery.artifacts || artifacts,
     };
   } catch (error) {
     return {
