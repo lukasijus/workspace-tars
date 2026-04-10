@@ -26,6 +26,23 @@ All normal entrypoints live in `scripts/`:
 - `scripts/tars-lifecycle-watchdog.sh`
 - `scripts/tars-lifecycle-dashboard.sh`
 
+## Operator Flow
+
+Normal operator flow:
+
+1. `scripts/tars-lifecycle-search-batch.sh`
+2. Open `scripts/tars-lifecycle-dashboard.sh`
+3. Review `needs_human_input` and `pending_approval`
+4. Approve rows that are ready
+5. `scripts/tars-lifecycle-submit-approved.sh`
+6. Recheck the dashboard and artifacts
+
+Notes:
+
+- `search_batch` already performs search, ingest, CV generation, and flow discovery.
+- `submit_approved` only acts on rows already moved to `approved`.
+- The single-item page is the correct place for actions like retry discovery or manual inactive flagging.
+
 ## Requirements
 
 - `TARS_LIFECYCLE_DATABASE_URL` must be configured
@@ -44,3 +61,4 @@ Optional:
 - External flows that still have unresolved questions remain `needs_human_input` with the latest step snapshot and extracted blockers.
 - Greenhouse/Lever are still classified and tracked, but not yet auto-submitted here.
 - The dashboard is the operator approval surface.
+- Fresh-session operational summary lives in `../RUNBOOK.md`.

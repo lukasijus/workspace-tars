@@ -45,6 +45,9 @@ Add whatever helps you do your job. This is your cheat sheet.
 - One-time bootstrap login: `scripts/tars-linkedin-browser.sh --headed`
 - Reopen the same profile later: same command, optionally `--url https://www.linkedin.com/feed/`
 - Autonomous saved search run: `scripts/tars-linkedin-search.sh`
+- Main lifecycle discovery run: `scripts/tars-lifecycle-search-batch.sh`
+- Main lifecycle submit run: `scripts/tars-lifecycle-submit-approved.sh`
+- Dashboard: `scripts/tars-lifecycle-dashboard.sh`
 - Latest structured output: `linkedin_search/output/latest_jobs.json`
 - Search definitions live in: `linkedin_search/search_profile.json`
 - Do not rely on the human's live browser session for routine automation. Use the dedicated persistent profile instead.
@@ -77,3 +80,11 @@ Top match: Company — Data Platform Engineer/Architect
 Tailored CV attached below.
 MEDIA:/absolute/path/to/generated-cv.pdf
 ```
+
+## Lifecycle Operator Notes
+
+- Fresh-session handoff: `RUNBOOK.md`
+- Detailed lifecycle docs: `lifecycle/README.md`
+- Search batch already includes ingest + CV variant generation + flow discovery.
+- `submit-approved` only acts on rows already moved to `approved`.
+- Prefer using the real shell scripts as the interface. Do not invent custom slash commands unless the runtime explicitly supports them.

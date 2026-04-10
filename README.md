@@ -247,6 +247,12 @@ Run one search/discovery batch:
 ./scripts/tars-lifecycle-search-batch.sh
 ```
 
+This is the main lifecycle entrypoint. It already covers:
+- search
+- ingest
+- CV variant generation
+- apply-flow discovery
+
 Submit approved Easy Apply applications:
 
 ```bash
@@ -258,6 +264,18 @@ Generate or send the daily summary:
 ```bash
 ./scripts/tars-lifecycle-summary.sh
 ```
+
+## Fresh Session Handoff
+
+For new Tars sessions, start with:
+
+- `AGENTS.md`
+- `README.md`
+- `RUNBOOK.md`
+- `lifecycle/README.md`
+- `memory/YYYY-MM-DD.md` for today and yesterday
+
+The short operator playbook lives in [RUNBOOK.md](./RUNBOOK.md).
 
 Run the stale-run watchdog:
 

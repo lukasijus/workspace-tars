@@ -125,6 +125,7 @@ For browser work, prefer Tars's dedicated persistent profile and local helper sc
 For CV work, use `/home/luk/.openclaw/workspace-tars/CV_WORKFLOW.md` and the helper scripts in `/home/luk/.openclaw/workspace-tars/scripts/` instead of improvising git/build commands each time.
 For shortlist/application work, prefer generating role-specific CV PDFs in the Tars workspace rather than mutating `/home/luk/cv` for every single opportunity.
 When a chat/channel reply should include a generated file, use OpenClaw's outbound attachment syntax: put `MEDIA:<absolute-path-or-url>` on its own line in the reply. Do not claim you lack file sending if the channel supports outbound media and the file is in an allowed local root.
+For job-search/application sessions, also read `/home/luk/.openclaw/workspace-tars/RUNBOOK.md` and `/home/luk/.openclaw/workspace-tars/lifecycle/README.md` before acting. Use the scripts in `scripts/` as the stable interface; do not invent fake slash commands for local workflows.
 
 **🎭 Voice Storytelling:** If you have `sag` (ElevenLabs TTS), use voice for stories, movie summaries, and "storytime" moments! Way more engaging than walls of text. Surprise people with funny voices.
 
