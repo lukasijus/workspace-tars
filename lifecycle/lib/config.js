@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const { loadApplicantPolicy } = require("./applicant-policy");
+const { loadApplicantFacts } = require("./applicant-facts");
 
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const ENV_PATH = path.join(WORKSPACE_ROOT, ".env");
@@ -19,6 +20,12 @@ const DEFAULT_APPLICANT_POLICY_PATH = path.join(
   "lifecycle",
   "policies",
   "applicant_policy.json",
+);
+const DEFAULT_APPLICANT_FACTS_PATH = path.join(
+  WORKSPACE_ROOT,
+  "lifecycle",
+  "policies",
+  "applicant_facts.json",
 );
 
 function envString(key, fallback = "") {
@@ -80,6 +87,10 @@ const config = {
     "TARS_LIFECYCLE_APPLICANT_POLICY_PATH",
     DEFAULT_APPLICANT_POLICY_PATH,
   ),
+  applicantFactsPath: envString(
+    "TARS_LIFECYCLE_APPLICANT_FACTS_PATH",
+    DEFAULT_APPLICANT_FACTS_PATH,
+  ),
   summaryEmailTo: envString("TARS_LIFECYCLE_SUMMARY_EMAIL_TO"),
   summaryEmailFrom: envString("TARS_LIFECYCLE_SUMMARY_EMAIL_FROM"),
   smtpHost: envString("TARS_LIFECYCLE_SUMMARY_SMTP_HOST"),
@@ -113,6 +124,7 @@ const config = {
 };
 
 config.applicantPolicy = loadApplicantPolicy(config.applicantPolicyPath);
+config.applicantFacts = loadApplicantFacts(config.applicantFactsPath);
 
 function assertDatabaseUrl() {
   if (!config.databaseUrl) {

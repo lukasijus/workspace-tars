@@ -49,6 +49,7 @@ Notes:
 - LinkedIn browser profile must already be bootstrapped
 - CV generation should already be working
 - applicant policy defaults live in `lifecycle/policies/applicant_policy.json`
+- applicant facts and reusable job-form answers live in `lifecycle/policies/applicant_facts.json`
 
 Optional:
 
@@ -58,6 +59,7 @@ Optional:
 
 - The system records **all reachable apply flows** discovered from LinkedIn.
 - Automatic submission is implemented for **LinkedIn Easy Apply** and best-effort **external custom** flows that can be completed from the applicant profile/policy.
+- Generic screening questions are resolved through the shared question engine using applicant facts + policy, not only exact string matching.
 - External flows that still have unresolved questions remain `needs_human_input` with the latest step snapshot and extracted blockers.
 - Greenhouse/Lever are still classified and tracked, but not yet auto-submitted here.
 - The dashboard is the operator approval surface.

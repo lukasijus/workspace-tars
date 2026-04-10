@@ -22,19 +22,29 @@ const {
 const { submitEasyApply } = require('./lib/application-discovery');
 const { submitExternalCustom } = require('./lib/external-apply');
 
-async function main() {
+async function runSubmitApproved(options = {}) {
   await applyMigrations();
+  const applicationIds = Array.isArray(options.applicationIds)
+    ? options.applicationIds.map((value) => Number(value)).filter(Number.isInteger)
+    : [];
+  const limit = Number.isInteger(options.limit) && options.limit > 0
+    ? options.limit
+    : applicationIds.length || config.searchBatchSize;
 
   const workerRun = await withTransaction((client) => createWorkerRun(client, {
     kind: 'submit_approved',
     timeoutMinutes: config.runTimeoutMinutes,
-    details: {},
+    details: {
+      source: options.source || 'cli',
+      applicationIds,
+    },
   }));
 
   try {
     const applications = await withTransaction((client) => findApprovedApplications(
       client,
-      config.searchBatchSize,
+      limit,
+      applicationIds,
     ));
 
     const summary = {
@@ -46,6 +56,8 @@ async function main() {
       needsHumanInput: 0,
       failed: 0,
       deferred: 0,
+      scope: applicationIds.length ? 'selected' : 'all_approved',
+      selectedApplicationIds: applicationIds,
     };
 
     for (const application of applications) {
@@ -225,7 +237,7 @@ async function main() {
       });
     });
 
-    console.log(JSON.stringify(summary, null, 2));
+    return summary;
   } catch (error) {
     await withTransaction(async (client) => {
       await finishWorkerRun(client, workerRun.id, {
@@ -241,13 +253,24 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(JSON.stringify({
-    ok: false,
-    action: 'submit_approved',
-    error: error.message,
-  }, null, 2));
-  process.exitCode = 1;
-}).finally(async () => {
-  await closePool().catch(() => {});
-});
+async function main() {
+  const summary = await runSubmitApproved();
+  console.log(JSON.stringify(summary, null, 2));
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(JSON.stringify({
+      ok: false,
+      action: 'submit_approved',
+      error: error.message,
+    }, null, 2));
+    process.exitCode = 1;
+  }).finally(async () => {
+    await closePool().catch(() => {});
+  });
+}
+
+module.exports = {
+  runSubmitApproved,
+};

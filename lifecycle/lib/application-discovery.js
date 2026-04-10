@@ -15,6 +15,7 @@ const {
 } = require("./utils");
 const { FLOW_TYPE } = require("./state");
 const { inspectExternalFlow } = require("./external-apply");
+const { resolveFieldAnswer, annotateResolvedField } = require("./question-engine");
 
 function classifyExternalUrl(targetUrl) {
   if (!targetUrl) return FLOW_TYPE.UNKNOWN;
@@ -107,6 +108,26 @@ async function inspectJobAvailability(page) {
       reason: matched.reason,
     };
   });
+}
+
+async function inspectLinkedInAppliedState(page) {
+  const html = await page.content().catch(() => "");
+  const bodyText = await page
+    .evaluate(() => String(document.body?.innerText || ""))
+    .catch(() => "");
+
+  const applied =
+    /"applied":true/i.test(html) ||
+    /"formattedApplyDate":"Submitted on/i.test(html) ||
+    /\bsubmitted on\b/i.test(bodyText) ||
+    /\byour application was sent\b/i.test(bodyText);
+
+  const formattedMatch = html.match(/"formattedApplyDate":"([^"]+)"/i);
+
+  return {
+    applied,
+    reason: formattedMatch?.[1] || (applied ? "Already applied on LinkedIn" : null),
+  };
 }
 
 async function findVisibleApplyButton(page, pattern) {
@@ -218,6 +239,20 @@ async function extractEasyApplyState(page) {
           field.getAttribute("aria-required") === "true" ||
           /\*/.test(label);
         const value = "value" in field ? String(field.value || "").trim() : "";
+        const selectedOption =
+          field.tagName.toLowerCase() === "select"
+            ? field.options?.[field.selectedIndex] || null
+            : null;
+        const selectedLabel =
+          selectedOption
+            ? normalize(selectedOption.textContent || selectedOption.value || "")
+            : "";
+        const isPlaceholderSelect =
+          field.tagName.toLowerCase() === "select" &&
+          (/^select\b/i.test(selectedLabel) ||
+            /^choose\b/i.test(selectedLabel) ||
+            /^please select\b/i.test(selectedLabel) ||
+            /^select an option$/i.test(value));
         return {
           name: field.getAttribute("name") || field.id || null,
           label: normalize(label),
@@ -226,7 +261,14 @@ async function extractEasyApplyState(page) {
               ? "select"
               : field.getAttribute("type") || field.tagName.toLowerCase(),
           required,
-          valuePresent: value.length > 0,
+          valuePresent: value.length > 0 && !isPlaceholderSelect,
+          options:
+            field.tagName.toLowerCase() === "select"
+              ? Array.from(field.options || []).map((option) => ({
+                  value: String(option.value || "").trim(),
+                  label: normalize(option.textContent || option.value || ""),
+                }))
+              : undefined,
         };
       });
 
@@ -267,45 +309,16 @@ function normalizePhoneValue(field, value) {
 }
 
 function getApplicantAutofillValue(field) {
-  const key = fieldSearchText(field);
-  const profile = config.applicantProfile || {};
-
-  if (/first name/.test(key)) return profile.firstName || "";
-  if (/last name/.test(key)) return profile.lastName || "";
-  if (/phone country code|nationality code|phone.*country/.test(key))
-    return profile.phoneCountryCode || "";
-  if (/mobile phone number|phone number|nationalnumber|phone/.test(key)) {
-    return normalizePhoneValue(field, profile.phoneLocal || "");
+  const resolution = resolveFieldAnswer(field);
+  if (!resolution.answer) return "";
+  if (/mobile phone number|phone number|nationalnumber|phone/.test(fieldSearchText(field))) {
+    return normalizePhoneValue(field, resolution.answer);
   }
-  if (/desired salary/.test(key)) return profile.desiredSalary || "";
-  if (/email/.test(key)) return profile.email || "";
-  if (/linkedin profile/.test(key)) return profile.linkedinProfileUrl || "";
-  if (/countries where you hold citizenship/.test(key))
-    return profile.citizenshipCountries || "";
-  if (/countries where you hold a right to permanent residency/.test(key))
-    return profile.permanentResidencyCountries || "";
-  if (/location|city/.test(key)) return profile.city || "";
-  if (/read and approved the privacy notice to job applicant/.test(key))
-    return profile.policyRead || "YES";
-  if (
-    /considered for other job positions.*privacy notice to job applicant/.test(
-      key,
-    )
-  )
-    return profile.policyAgree || "YES";
-  if (/personal data consent/.test(key))
-    return profile.policyPersonalDataConsent || profile.policyRead || "YES";
-  return "";
+  return resolution.answer;
 }
 
 function annotateEasyApplyFields(fields = []) {
-  return fields.map((field) => {
-    const autofillValue = getApplicantAutofillValue(field);
-    return {
-      ...field,
-      autofillAvailable: Boolean(autofillValue),
-    };
-  });
+  return fields.map((field) => annotateResolvedField(field));
 }
 
 function getUnfillableRequiredFields(fields = []) {
@@ -313,7 +326,7 @@ function getUnfillableRequiredFields(fields = []) {
     (field) =>
       field.required &&
       !field.valuePresent &&
-      !getApplicantAutofillValue(field),
+      !annotateResolvedField(field).autoAnswerable,
   );
 }
 
@@ -466,11 +479,23 @@ async function setEasyApplyFieldValue(page, field, value) {
           const valueText = String(option.value || "")
             .trim()
             .toLowerCase();
+          const isYes =
+            normalizedDesired === "yes" &&
+            /(^yes\b|\bagree\b|\baccept\b|\beligible\b|\bauthorized\b)/i.test(
+              label,
+            );
+          const isNo =
+            normalizedDesired === "no" &&
+            /(^no\b|\bdecline\b|\bnot authorized\b|\brequire sponsorship\b)/i.test(
+              label,
+            );
           return (
             label === normalizedDesired ||
             valueText === normalizedDesired ||
             label.includes(normalizedDesired) ||
-            valueText.includes(normalizedDesired)
+            valueText.includes(normalizedDesired) ||
+            isYes ||
+            isNo
           );
         });
         if (!match) return false;
@@ -497,11 +522,13 @@ async function autofillEasyApplyFields(page, fields = []) {
   const skipped = [];
 
   for (const field of fields) {
-    const value = getApplicantAutofillValue(field);
-    if (!value) {
+    const resolvedField = annotateResolvedField(field);
+    const value = resolvedField.resolvedAnswer;
+    if (!resolvedField.autoAnswerable || !value) {
       skipped.push({
         name: field.name || null,
         label: field.label || null,
+        questionIntent: resolvedField.questionIntent || null,
       });
       continue;
     }
@@ -511,11 +538,13 @@ async function autofillEasyApplyFields(page, fields = []) {
       filled.push({
         name: field.name || null,
         label: field.label || null,
+        questionIntent: resolvedField.questionIntent || null,
       });
     } else {
       skipped.push({
         name: field.name || null,
         label: field.label || null,
+        questionIntent: resolvedField.questionIntent || null,
       });
     }
   }
@@ -672,6 +701,14 @@ async function discoverApplicationFlow(job, options = {}) {
       };
     }
 
+    // External discovery launches its own persistent browser context. Close the
+    // LinkedIn context first or Chrome's ProcessSingleton will reject the second
+    // launch against the same profile directory.
+    if (context) {
+      await context.close().catch(() => {});
+      context = null;
+    }
+
     const externalDiscovery = await inspectExternalFlow(externalUrl, {
       headed: Boolean(options.headed),
       application: options.application || null,
@@ -747,11 +784,40 @@ async function submitEasyApply(job, application, options = {}) {
       };
     }
 
+    const appliedState = await inspectLinkedInAppliedState(page);
+    if (appliedState.applied) {
+      artifacts = await savePageArtifacts(
+        page,
+        `submit-already-applied-${job.jobId || job.title}`,
+      );
+      return {
+        ok: true,
+        status: "submitted",
+        reason: appliedState.reason,
+        artifacts,
+        jobActive: true,
+      };
+    }
+
     const easyButton = await findVisibleApplyButton(
       page,
       /easy apply|continue applying/i,
     );
     if (!easyButton) {
+      const appliedStateWhenMissing = await inspectLinkedInAppliedState(page);
+      if (appliedStateWhenMissing.applied) {
+        artifacts = await savePageArtifacts(
+          page,
+          `submit-already-applied-${job.jobId || job.title}`,
+        );
+        return {
+          ok: true,
+          status: "submitted",
+          reason: appliedStateWhenMissing.reason,
+          artifacts,
+          jobActive: true,
+        };
+      }
       const refreshedAvailability = await inspectJobAvailability(page);
       artifacts = await savePageArtifacts(
         page,

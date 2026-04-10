@@ -373,7 +373,10 @@ async function findApplicationsForApproval(client, limit = 50) {
   return result.rows;
 }
 
-async function findApprovedApplications(client, limit = 20) {
+async function findApprovedApplications(client, limit = 20, applicationIds = []) {
+  const ids = Array.isArray(applicationIds)
+    ? applicationIds.map((value) => Number(value)).filter(Number.isInteger)
+    : [];
   const result = await client.query(
     `SELECT
       applications.*,
@@ -387,9 +390,13 @@ async function findApprovedApplications(client, limit = 20) {
     JOIN jobs ON jobs.id = applications.job_id
     WHERE applications.status = $1
       AND COALESCE(jobs.is_active, true) = true
+      AND (
+        COALESCE(array_length($3::int[], 1), 0) = 0
+        OR applications.id = ANY($3::int[])
+      )
     ORDER BY applications.updated_at ASC
     LIMIT $2`,
-    [APPLICATION_STATUS.APPROVED, limit],
+    [APPLICATION_STATUS.APPROVED, limit, ids],
   );
   return result.rows;
 }

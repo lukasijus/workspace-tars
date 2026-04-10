@@ -18,6 +18,7 @@ const {
   updateApplicationStatus,
 } = require('./lib/repository');
 const { discoverApplicationFlow } = require('./lib/application-discovery');
+const { runSubmitApproved } = require('./submit_approved');
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -348,6 +349,8 @@ function layout(title, body) {
       .thumb { display: block; width: 112px; height: 72px; object-fit: cover; }
       .hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-bottom: 18px; }
       .hero p { margin: 0; max-width: 720px; }
+      .hero-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      button[disabled] { opacity: 0.45; cursor: not-allowed; }
       .page-status {
         position: sticky;
         top: 12px;
@@ -582,6 +585,7 @@ async function renderHome() {
     fetchApplicationsByStatus(APPLICATION_STATUS.NEEDS_HUMAN_INPUT, 20),
     fetchRecentApplications(20),
   ]);
+  const approvedCount = stats.applicationCounts.approved || 0;
   const statsCards = Object.entries({
     pending_approval: stats.applicationCounts.pending_approval || 0,
     needs_human_input: stats.applicationCounts.needs_human_input || 0,
@@ -594,6 +598,11 @@ async function renderHome() {
       <div>
         <h1>Tars Lifecycle Dashboard</h1>
         <p class="muted">Local operator surface for approvals, latest workflow snapshots, and application health.</p>
+      </div>
+      <div class="hero-actions">
+        <form class="inline js-async-form" method="post" action="/submit-approved" data-pending-label="Submitting approved applications…">
+          <button class="approve" type="submit"${approvedCount ? '' : ' disabled'}>Submit approved${approvedCount ? ` (${approvedCount})` : ''}</button>
+        </form>
       </div>
     </div>
     <div class="grid">${statsCards}</div>
@@ -847,9 +856,40 @@ async function handleMarkInactive(applicationId, request, response) {
   response.end();
 }
 
+async function handleSubmitApproved(response, applicationId = null) {
+  if (applicationId) {
+    const current = await fetchApplicationRow(applicationId);
+    if (!current) {
+      sendHtml(response, layout('Not found', '<h1>Not found</h1>'), 404);
+      return;
+    }
+
+    if (current.status !== APPLICATION_STATUS.APPROVED) {
+      sendHtml(response, layout('Submit blocked', `
+        <p><a href="/applications/${applicationId}">← application</a></p>
+        <h1>Submit blocked</h1>
+        <p>This application is currently <strong>${escapeHtml(current.status)}</strong>, not <strong>${APPLICATION_STATUS.APPROVED}</strong>.</p>
+        <p>Approve it first, or fix discovery/manual blockers before submitting.</p>
+      `), 409);
+      return;
+    }
+  }
+
+  await runSubmitApproved({
+    applicationIds: applicationId ? [applicationId] : [],
+    limit: applicationId ? 1 : config.searchBatchSize,
+    source: 'dashboard',
+  });
+
+  response.writeHead(303, {
+    Location: applicationId ? `/applications/${applicationId}` : '/',
+  });
+  response.end();
+}
+
 async function requestHandler(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-  const match = url.pathname.match(/^\/applications\/(\d+)(?:\/(approve|reject|retry-discovery|mark-inactive))?$/);
+  const match = url.pathname.match(/^\/applications\/(\d+)(?:\/(approve|reject|retry-discovery|mark-inactive|submit))?$/);
   const artifactMatch = url.pathname.match(/^\/artifacts\/(\d+)$/);
 
   if (artifactMatch && request.method === 'GET') {
@@ -882,6 +922,11 @@ async function requestHandler(request, response) {
     return;
   }
 
+  if (request.method === 'POST' && url.pathname === '/submit-approved') {
+    await handleSubmitApproved(response, null);
+    return;
+  }
+
   if (match && request.method === 'GET') {
     const detail = await withTransaction((client) => fetchApplicationDetail(client, Number(match[1])));
     if (!detail) {
@@ -903,6 +948,14 @@ async function requestHandler(request, response) {
         <button class="reject" type="submit">Reject</button>
       </form>`
       : '';
+    const submitButton =
+      detail.application.status === APPLICATION_STATUS.APPROVED &&
+      detail.application.is_active !== false
+        ? `
+      <form class="inline js-async-form" method="post" action="/applications/${detail.application.id}/submit" data-pending-label="Submitting application…">
+        <button class="approve" type="submit">Submit now</button>
+      </form>`
+        : '';
     const retryButton = detail.application.is_active === false
       ? ''
       : `
@@ -934,6 +987,7 @@ async function requestHandler(request, response) {
       <p><strong>CV:</strong> ${escapeHtml(detail.application.cv_variant_file_name || 'n/a')}</p>
       <p><strong>Reason:</strong> ${escapeHtml(detail.application.inactive_reason || detail.application.last_error || detail.application.draft_payload?.reason || 'n/a')}</p>
       ${actionButtons}
+      ${submitButton}
       ${retryButton}
       ${inactiveButton}
       ${externalStep ? `
@@ -945,6 +999,10 @@ async function requestHandler(request, response) {
           unresolvedFields: unresolvedFields.map((field) => ({
             label: field.label,
             type: field.type,
+            questionIntent: field.questionIntent || null,
+            resolvedAnswer: field.resolvedAnswer || null,
+            resolutionSource: field.resolutionSource || null,
+            resolutionConfidence: field.resolutionConfidence || 0,
           })),
           validationErrors: externalStep.validationErrors || [],
           buttons: externalStep.buttons || [],
@@ -969,6 +1027,10 @@ async function requestHandler(request, response) {
   if (match && request.method === 'POST' && match[2]) {
     if (match[2] === 'retry-discovery') {
       await handleRetryDiscovery(Number(match[1]), response);
+      return;
+    }
+    if (match[2] === 'submit') {
+      await handleSubmitApproved(response, Number(match[1]));
       return;
     }
     if (match[2] === 'mark-inactive') {

@@ -10,7 +10,12 @@ const {
   slugify,
   stampForFile,
 } = require("./utils");
-const { normalizeText, policyValue, truthyPolicyValue } = require("./applicant-policy");
+const { normalizeText } = require("./applicant-policy");
+const {
+  buildQuestionText,
+  resolveFieldAnswer,
+  annotateResolvedField,
+} = require("./question-engine");
 const { FLOW_TYPE } = require("./state");
 const fs = require("fs");
 const path = require("path");
@@ -59,10 +64,6 @@ function externalMaxSteps() {
 
 function externalMaxSameFingerprint() {
   return Number(config.applicantPolicy?.external?.maxSameFingerprint) || 2;
-}
-
-function yesNoDefault() {
-  return config.applicantPolicy?.external?.defaultYesNo || "YES";
 }
 
 function detectHumanCheck(step) {
@@ -177,6 +178,23 @@ function inferProviderFromUrl(targetUrl, frameUrl) {
   if (hostname.includes("greenhouse")) return "greenhouse";
   if (hostname.includes("lever")) return "lever";
   return "custom_generic";
+}
+
+function annotateExternalStepFields(step, application = null) {
+  const annotatedFields = (step.fields || []).map((field) =>
+    annotateResolvedField(field, { application }),
+  );
+  const requiredFields = annotatedFields.filter((field) => field.required);
+  const unresolvedFields = requiredFields.filter(
+    (field) => !field.valuePresent && !field.autoAnswerable,
+  );
+
+  return {
+    ...step,
+    fields: annotatedFields,
+    requiredFields,
+    unresolvedFields,
+  };
 }
 
 async function extractStepFromContext(root, contextInfo = {}) {
@@ -440,7 +458,7 @@ async function extractStepFromContext(root, contextInfo = {}) {
   );
 }
 
-async function collectContextCandidates(page, targetUrl) {
+async function collectContextCandidates(page, targetUrl, application = null) {
   const candidates = [];
   candidates.push({
     root: page,
@@ -472,10 +490,13 @@ async function collectContextCandidates(page, targetUrl) {
       const providerHint = inferProviderFromUrl(targetUrl, step.url);
       extracted.push({
         ...candidate,
-        step: {
-          ...step,
-          providerHint,
-        },
+        step: annotateExternalStepFields(
+          {
+            ...step,
+            providerHint,
+          },
+          application,
+        ),
       });
     } catch {
       // Ignore inaccessible frames or transient extraction failures.
@@ -529,88 +550,17 @@ function externalPhoneValue(field) {
 }
 
 function resolveApplicantValue(field, application = {}) {
-  const label = normalizeText(field.label || "");
-  const key = normalizeText(`${field.label} ${field.name || ""} ${field.id || ""}`);
-  const profile = config.applicantProfile || {};
-  const policy = config.applicantPolicy || {};
-  const fullName =
-    String(profile.displayName || "").trim() ||
-    [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
-  const preferredName = String(profile.firstName || profile.displayName || "").trim();
-
-  if (field.type === "file") {
-    return application.cv_variant_path || "";
+  const resolution = resolveFieldAnswer(field, { application });
+  if (!resolution.answer) return "";
+  if (/phone|mobile|telephone|nationalnumber/.test(normalizeText(buildQuestionText(field)))) {
+    return externalPhoneValue({
+      ...field,
+      label: field.label,
+      name: field.name,
+      id: field.id,
+    });
   }
-
-  if (/preferred name/.test(key)) return preferredName || "";
-  if (/\byour name\b|full name|legal name/.test(key)) return fullName || "";
-  if (/first name/.test(key)) return profile.firstName || "";
-  if (/last name/.test(key)) return profile.lastName || "";
-  if (/email/.test(key)) return profile.email || "";
-  if (/phone|mobile|telephone|nationalnumber/.test(key)) {
-    return externalPhoneValue(field);
-  }
-  if (/linkedin profile/.test(key)) return profile.linkedinProfileUrl || "";
-  if (/city|location/.test(key)) return profile.city || "";
-  if (/salary/.test(key)) return profile.desiredSalary || "";
-  if (/citizenship/.test(key)) return profile.citizenshipCountries || "";
-  if (/permanent residency|residency/.test(key)) {
-    return profile.permanentResidencyCountries || "";
-  }
-
-  const preferYes = [
-    /privacy notice/i,
-    /personal data consent/i,
-    /data processing/i,
-    /background check/i,
-    /agree to be considered for other job positions/i,
-    /authorized to work/i,
-    /legally authorized to work/i,
-    /eligible to work/i,
-  ];
-  const preferNo = [/visa sponsorship/i, /require sponsorship/i, /need sponsorship/i];
-
-  if (field.type === "radio" || field.type === "checkbox" || field.type === "checkbox_group") {
-    if (/read .*privacy notice/i.test(label)) {
-      return truthyPolicyValue(
-        profile.policyRead || policyValue(policy, "readPrivacyNotice", yesNoDefault()),
-      );
-    }
-    if (/considered for other job positions/i.test(label)) {
-      return truthyPolicyValue(
-        profile.policyAgree || policyValue(policy, "allowFutureRoles", yesNoDefault()),
-      );
-    }
-    if (/personal data consent|data processing|consent/i.test(label)) {
-      return truthyPolicyValue(
-        profile.policyPersonalDataConsent ||
-          policyValue(policy, "personalDataConsent", yesNoDefault()),
-      );
-    }
-    if (preferNo.some((pattern) => pattern.test(label))) {
-      return truthyPolicyValue(policyValue(policy, "needVisaSponsorship", "NO"), "NO");
-    }
-    if (preferYes.some((pattern) => pattern.test(label))) {
-      const policyKey = /background check/i.test(label)
-        ? "consentToBackgroundCheck"
-        : "authorizedToWork";
-      return truthyPolicyValue(policyValue(policy, policyKey, yesNoDefault()));
-    }
-
-    const optionLabels = (field.options || [])
-      .map((option) => normalizeText(option.label))
-      .filter(Boolean);
-    const onlyYesNo =
-      optionLabels.length >= 2 &&
-      optionLabels.every((option) =>
-        ["yes", "no"].some((choice) => option === choice || option.includes(choice)),
-      );
-    if (onlyYesNo) {
-      return truthyPolicyValue(policyValue(policy, "readPrivacyNotice", yesNoDefault()));
-    }
-  }
-
-  return "";
+  return resolution.answer;
 }
 
 function optionMatchesDesired(option, desired) {
@@ -635,12 +585,13 @@ async function setFieldValue(root, field, desiredValue, application = {}) {
   const selector = selectors.join(", ");
 
   if (field.type === "radio" || field.type === "checkbox" || field.type === "checkbox_group") {
+    const desiredYes = /^(1|true|yes|on)$/i.test(String(desiredValue || "").trim());
     for (const option of field.options || []) {
       const matches =
         field.type === "checkbox_group"
           ? optionMatchesDesired(option, desiredValue)
           : optionMatchesDesired(option, desiredValue) ||
-            (truthyPolicyValue(desiredValue) === "YES" &&
+            (desiredYes &&
               (field.type === "checkbox" || field.type === "checkbox_group"));
       if (!matches) continue;
 
@@ -662,11 +613,38 @@ async function setFieldValue(root, field, desiredValue, application = {}) {
       locator = root.getByLabel(field.label, { exact: false }).first();
     }
     if (!(await locator.count().catch(() => 0))) return false;
-    await locator
-      .selectOption({ label: String(desiredValue) })
-      .catch(async () => {
-        await locator.selectOption({ value: String(desiredValue) }).catch(() => {});
-      });
+    const ok = await locator
+      .evaluate((element, desired) => {
+        if (!element || element.tagName.toLowerCase() !== "select") return false;
+        const options = Array.from(element.options || []);
+        const wanted = String(desired || "").trim().toLowerCase();
+        const match = options.find((option) => {
+          const label = String(option.textContent || "").trim().toLowerCase();
+          const value = String(option.value || "").trim().toLowerCase();
+          const isYes =
+            wanted === "yes" &&
+            /(^yes\b|\bagree\b|\baccept\b|\beligible\b|\bauthorized\b)/i.test(label);
+          const isNo =
+            wanted === "no" &&
+            /(^no\b|\bdecline\b|\bnot authorized\b|\brequire sponsorship\b)/i.test(label);
+          return (
+            label === wanted ||
+            value === wanted ||
+            label.includes(wanted) ||
+            wanted.includes(label) ||
+            value.includes(wanted) ||
+            isYes ||
+            isNo
+          );
+        });
+        if (!match) return false;
+        element.value = match.value;
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, desiredValue)
+      .catch(() => false);
+    if (!ok) return false;
     return true;
   }
 
@@ -711,6 +689,12 @@ function unresolvedFieldsForStep(step) {
     label: field.label || null,
     type: field.type || null,
     options: field.options || [],
+    questionIntent: field.questionIntent || null,
+    questionKey: field.questionKey || null,
+    resolvedAnswer: field.resolvedAnswer || null,
+    resolutionSource: field.resolutionSource || null,
+    resolutionConfidence: field.resolutionConfidence || 0,
+    autoAnswerable: Boolean(field.autoAnswerable),
   }));
 }
 
@@ -769,7 +753,11 @@ async function inspectExternalFlow(targetUrl, options = {}) {
       };
     }
 
-    const candidates = await collectContextCandidates(page, targetUrl);
+    const candidates = await collectContextCandidates(
+      page,
+      targetUrl,
+      options.application || null,
+    );
     const active = candidates[0];
     artifacts = await saveExternalArtifacts(page, `external-discovery-${targetUrl}`);
 
@@ -784,10 +772,9 @@ async function inspectExternalFlow(targetUrl, options = {}) {
       };
     }
 
-    const unresolved = unresolvedFieldsForStep(active.step).filter((field) => {
-      if (field.type === "file") return !options.application?.cv_variant_path;
-      return !resolveApplicantValue(field, options.application);
-    });
+    const unresolved = unresolvedFieldsForStep(active.step).filter(
+      (field) => !field.autoAnswerable,
+    );
     const readiness = unresolved.length ? "needs_human_input" : "ready_for_approval";
     const reason = unresolved.length
       ? `External application needs more answers: ${unresolved
@@ -858,7 +845,7 @@ async function submitExternalCustom(job, application, options = {}) {
         };
       }
 
-      const candidates = await collectContextCandidates(page, targetUrl);
+      const candidates = await collectContextCandidates(page, targetUrl, application);
       const active = candidates[0];
       if (!active) {
         artifacts = await saveExternalArtifacts(
@@ -949,8 +936,8 @@ async function submitExternalCustom(job, application, options = {}) {
       const unresolved = [];
       for (const field of fields) {
         if (!field.required || field.valuePresent) continue;
-        const desiredValue = resolveApplicantValue(field, application);
-        if (!desiredValue && field.type !== "file") {
+        const desiredValue = field.resolvedAnswer || resolveApplicantValue(field, application);
+        if (!field.autoAnswerable && !desiredValue && field.type !== "file") {
           unresolved.push(field);
           continue;
         }
@@ -962,7 +949,11 @@ async function submitExternalCustom(job, application, options = {}) {
       }
 
       await page.waitForTimeout(1200);
-      const refreshedCandidates = await collectContextCandidates(page, targetUrl);
+      const refreshedCandidates = await collectContextCandidates(
+        page,
+        targetUrl,
+        application,
+      );
       const refreshed = refreshedCandidates[0] || active;
       const refreshedHumanCheck = detectHumanCheck(refreshed.step);
       if (refreshedHumanCheck) {
@@ -981,10 +972,9 @@ async function submitExternalCustom(job, application, options = {}) {
           step: refreshed.step,
         };
       }
-      const refreshedUnresolved = unresolvedFieldsForStep(refreshed.step).filter((field) => {
-        if (field.type === "file") return !application.cv_variant_path;
-        return !resolveApplicantValue(field, application);
-      });
+      const refreshedUnresolved = unresolvedFieldsForStep(refreshed.step).filter(
+        (field) => !field.autoAnswerable,
+      );
 
       if (refreshed.step.success) {
         artifacts = await saveExternalArtifacts(

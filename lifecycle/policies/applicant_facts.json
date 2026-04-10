@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "location": {
+    "city": "Helsinki",
+    "country": "Finland",
+    "basedInEuropeOrIsrael": true,
+    "canWorkCetHours": true
+  },
+  "authorization": {
+    "authorizedToWork": true,
+    "needVisaSponsorship": false,
+    "requireVisaSponsorship": false,
+    "citizenshipCountries": [
+      "Lithuania"
+    ],
+    "permanentResidencyCountries": [
+      "Finland"
+    ]
+  },
+  "experience": {
+    "reactTypescriptComplexApps": true,
+    "agenticCodingTools": true,
+    "clickhouseAtScale": false,
+    "distributedBackendSystemsGo": false,
+    "highScaleTelemetryPipelines": false,
+    "skills": {
+      "javascript": true,
+      "typescript": true,
+      "react": true,
+      "python": true,
+      "linux": true,
+      "sql": true,
+      "databases": true,
+      "machineVision": true,
+      "computerVision": true,
+      "agenticCodingTools": true,
+			"AWS": true,
+			"cloud": true
+    }
+  },
+  "preferences": {
+    "allowFutureRoles": true,
+    "readPrivacyNotice": true,
+    "personalDataConsent": true,
+    "consentToBackgroundCheck": true,
+    "willingToRelocate": true
+  },
+  "links": {
+    "personalWebsite": "https://lukasrimkus.me",
+    "portfolioUrl": "https://lukasrimkus.me",
+    "linkedinProfileUrl": "https://www.linkedin.com/in/lukasrimkus/"
+  }
+}
