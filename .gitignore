@@ -1,5 +1,6 @@
 .env
 .env.local
+node_modules/
 .openclaw/
 .state/
 memory/
@@ -8,3 +9,5 @@ linkedin_search/output/
 linkedin_search/linkedin_jobs.json
 linkedin_search/*.png
 cv_variants/output/
+lifecycle/output/
+*.sqlite

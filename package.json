@@ -1,0 +1,19 @@
+{
+  "name": "workspace-tars",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "tars:lifecycle:migrate": "node lifecycle/migrate.js",
+    "tars:lifecycle:search-batch": "node lifecycle/search_batch.js",
+    "tars:lifecycle:submit-approved": "node lifecycle/submit_approved.js",
+    "tars:lifecycle:summary": "node lifecycle/send_daily_summary.js",
+    "tars:lifecycle:watchdog": "node lifecycle/watchdog.js",
+    "tars:lifecycle:dashboard": "node lifecycle/dashboard.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "nodemailer": "^7.0.10",
+    "pg": "^8.16.3"
+  }
+}

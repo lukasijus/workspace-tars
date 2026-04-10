@@ -117,7 +117,7 @@ async function launchPersistentContext({ headed = false } = {}) {
     throw new Error(`Chrome executable not found at ${CHROME_PATH}`);
   }
 
-  return chromium.launchPersistentContext(PROFILE_DIR, {
+  const launchOptions = {
     executablePath: CHROME_PATH,
     headless: !headed,
     viewport: { width: 1440, height: 1024 },
@@ -131,7 +131,22 @@ async function launchPersistentContext({ headed = false } = {}) {
       '--no-first-run',
       '--start-maximized',
     ],
-  });
+  };
+
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      return await chromium.launchPersistentContext(PROFILE_DIR, launchOptions);
+    } catch (error) {
+      const message = String(error?.message || error);
+      const locked = /ProcessSingleton|profile directory.*in use|SingletonLock/i.test(message);
+      if (!locked || attempt === 4) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+    }
+  }
+
+  throw new Error('Failed to launch persistent browser context');
 }
 
 async function getPrimaryPage(context) {
