@@ -102,12 +102,65 @@ async function extractEasyApplyState(page) {
     );
     if (!dialog) return null;
 
-    const fields = Array.from(
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+    const choiceGroups = Array.from(dialog.querySelectorAll("fieldset")).flatMap(
+      (fieldset) => {
+        const inputs = Array.from(
+          fieldset.querySelectorAll('input[type="radio"], input[type="checkbox"]'),
+        );
+        if (!inputs.length) return [];
+
+        const type = inputs[0].getAttribute("type") || "radio";
+        const legend = normalize(fieldset.querySelector("legend")?.textContent);
+        const label = legend || normalize(fieldset.textContent) || "field";
+        const required =
+          inputs.some(
+            (input) =>
+              input.required || input.getAttribute("aria-required") === "true",
+          ) || /required|\*/i.test(label);
+        const valuePresent =
+          type === "checkbox"
+            ? inputs.some((input) => input.checked)
+            : inputs.some((input) => input.checked);
+        const options = inputs.map((input) => {
+          const optionLabel = normalize(
+            fieldset.querySelector(`label[for="${input.id}"]`)?.textContent ||
+              input.closest("label")?.textContent ||
+              input.getAttribute("value") ||
+              input.value,
+          );
+          return {
+            label: optionLabel,
+            checked: Boolean(input.checked),
+          };
+        });
+
+        return [
+          {
+            name: inputs[0].getAttribute("name") || inputs[0].id || null,
+            label,
+            type,
+            required,
+            valuePresent,
+            options,
+          },
+        ];
+      },
+    );
+
+    const textFields = Array.from(
       dialog.querySelectorAll("input, textarea, select"),
     )
       .filter((field) => {
         const type = field.getAttribute("type");
-        return type !== "hidden" && type !== "submit" && type !== "button";
+        return (
+          type !== "hidden" &&
+          type !== "submit" &&
+          type !== "button" &&
+          type !== "radio" &&
+          type !== "checkbox"
+        );
       })
       .map((field) => {
         const label =
@@ -125,7 +178,7 @@ async function extractEasyApplyState(page) {
         const value = "value" in field ? String(field.value || "").trim() : "";
         return {
           name: field.getAttribute("name") || field.id || null,
-          label: label.replace(/\s+/g, " ").trim(),
+          label: normalize(label),
           type:
             field.tagName.toLowerCase() === "select"
               ? "select"
@@ -135,8 +188,10 @@ async function extractEasyApplyState(page) {
         };
       });
 
+    const fields = [...choiceGroups, ...textFields];
+
     const buttons = Array.from(dialog.querySelectorAll("button"))
-      .map((button) => button.textContent?.replace(/\s+/g, " ").trim())
+      .map((button) => normalize(button.textContent))
       .filter(Boolean);
 
     const emptyRequiredFields = fields.filter(
@@ -188,14 +243,16 @@ function getApplicantAutofillValue(field) {
   if (/countries where you hold a right to permanent residency/.test(key))
     return profile.permanentResidencyCountries || "";
   if (/location|city/.test(key)) return profile.city || "";
-  if (/I have read and approved the Privacy Notice to Job Applicant/.test(key))
+  if (/read and approved the privacy notice to job applicant/.test(key))
     return profile.policyRead || "YES";
   if (
-    /I agree to be considered for other job positions and allow my information to be collected , processed and searchable in the Privacy Notice to Job Applicant/.test(
+    /considered for other job positions.*privacy notice to job applicant/.test(
       key,
     )
   )
     return profile.policyAgree || "YES";
+  if (/personal data consent/.test(key))
+    return profile.policyPersonalDataConsent || profile.policyRead || "YES";
   return "";
 }
 
@@ -235,6 +292,95 @@ function buildFieldSelectors(field) {
 
 async function setEasyApplyFieldValue(page, field, value) {
   if (!field?.name || !value) return false;
+
+  if (field.type === "radio" || field.type === "checkbox") {
+    return page
+      .evaluate(({ name, label, type, desired }) => {
+        const dialog = document.querySelector(
+          '.jobs-easy-apply-modal, div[role="dialog"]',
+        );
+        if (!dialog) return false;
+
+        const normalize = (value) =>
+          String(value || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+
+        const desiredNormalized = normalize(desired);
+        const truthy = /^(1|true|yes|on|agree|accepted)$/i.test(
+          String(desired || "").trim(),
+        );
+
+        const fieldsets = Array.from(dialog.querySelectorAll("fieldset"));
+        let group = null;
+
+        if (name) {
+          group = fieldsets.find((fieldset) =>
+            Array.from(fieldset.querySelectorAll("input")).some(
+              (input) => (input.getAttribute("name") || input.id || null) === name,
+            ),
+          );
+        }
+
+        if (!group && label) {
+          const wanted = normalize(label);
+          group = fieldsets.find((fieldset) =>
+            normalize(fieldset.querySelector("legend")?.textContent).includes(wanted),
+          );
+        }
+
+        if (!group) return false;
+
+        const inputs = Array.from(
+          group.querySelectorAll(
+            type === "radio" ? 'input[type="radio"]' : 'input[type="checkbox"]',
+          ),
+        );
+        if (!inputs.length) return false;
+
+        const options = inputs.map((input) => {
+          const optionLabel = normalize(
+            group.querySelector(`label[for="${input.id}"]`)?.textContent ||
+              input.closest("label")?.textContent ||
+              input.value,
+          );
+          return { input, optionLabel };
+        });
+
+        let match = null;
+        if (type === "radio") {
+          match =
+            options.find(({ optionLabel }) => optionLabel === desiredNormalized) ||
+            options.find(({ optionLabel }) => optionLabel.includes(desiredNormalized)) ||
+            options.find(({ optionLabel }) => desiredNormalized.includes(optionLabel));
+        } else if (truthy) {
+          match = options[0];
+        }
+
+        if (!match) return false;
+
+        const labelNode =
+          group.querySelector(`label[for="${match.input.id}"]`) ||
+          match.input.closest("label");
+        if (labelNode) {
+          labelNode.click();
+        } else {
+          match.input.checked = true;
+          match.input.dispatchEvent(new Event("input", { bubbles: true }));
+          match.input.dispatchEvent(new Event("change", { bubbles: true }));
+          match.input.click();
+        }
+
+        return Boolean(match.input.checked);
+      }, {
+        name: field.name,
+        label: field.label,
+        type: field.type,
+        desired: value,
+      })
+      .catch(() => false);
+  }
 
   let locator = page
     .locator(

@@ -95,6 +95,9 @@ const config = {
     ),
     policyRead: envString("TARS_APPLICANT_READ_PRIVACY_APPROVED"),
     policyAgree: envString("TARS_APPLICANT_AGREE_PRIVACY"),
+    policyPersonalDataConsent: envString(
+      "TARS_APPLICANT_PERSONAL_DATA_CONSENT",
+    ),
   },
 };
 
