@@ -63,4 +63,6 @@ Optional:
 - External flows that still have unresolved questions remain `needs_human_input` with the latest step snapshot and extracted blockers.
 - Greenhouse/Lever are still classified and tracked, but not yet auto-submitted here.
 - The dashboard is the operator approval surface.
+- The dashboard UI now lives in `lifecycle/gui` and the dashboard API/server lives in `lifecycle/server`.
+- `scripts/tars-lifecycle-dashboard.sh` remains the stable command and serves the React dashboard on the configured lifecycle dashboard port.
 - Fresh-session operational summary lives in `../RUNBOOK.md`.

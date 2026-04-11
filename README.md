@@ -31,6 +31,8 @@ This repo is meant to be portable across OpenClaw instances. It avoids hardcodin
 ├── .env.example
 ├── lifecycle/
 │   ├── dashboard.js
+│   ├── gui/
+│   ├── server/
 │   ├── migrate.js
 │   ├── search_batch.js
 │   ├── send_daily_summary.js
@@ -78,8 +80,10 @@ Node dependencies:
 - `nodemailer`
 - `playwright-core`
 - `puppeteer-core`
+- dashboard server: `express`, `typescript`
+- dashboard GUI: `react`, `vite`, `@mui/material`
 
-These are installed from the workspace root `package.json` and `linkedin_search/package.json`.
+These are installed from the workspace root `package.json`, `linkedin_search/package.json`, and the dashboard packages under `lifecycle/server` and `lifecycle/gui`.
 
 ## Fresh Setup
 
@@ -94,6 +98,9 @@ npm install
 
 cd linkedin_search
 npm install
+
+cd ..
+npm run tars:lifecycle:dashboard:install
 ```
 
 ### 3. Create local configuration
@@ -158,6 +165,31 @@ Open the dedicated browser profile and log into LinkedIn manually:
 ```
 
 After that first login, the search automation can reuse the same profile autonomously.
+
+## Dashboard
+
+The lifecycle dashboard is a React/TypeScript/MUI app served by an Express/TypeScript server.
+
+Build and run it through the stable wrapper:
+
+```bash
+./scripts/tars-lifecycle-dashboard.sh
+```
+
+Open:
+
+```text
+http://127.0.0.1:4310/
+```
+
+For fast local development, use separate terminals:
+
+```bash
+npm --prefix lifecycle/server run dev
+npm --prefix lifecycle/gui run dev
+```
+
+The Vite dev server proxies `/api` and `/artifacts` to the lifecycle server.
 
 ## OpenClaw Integration
 

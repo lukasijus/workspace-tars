@@ -3,6 +3,7 @@
 node_modules/
 .openclaw/
 .state/
+.playwright-cli/
 memory/
 linkedin_search/node_modules/
 linkedin_search/output/
@@ -10,4 +11,9 @@ linkedin_search/linkedin_jobs.json
 linkedin_search/*.png
 cv_variants/output/
 lifecycle/output/
+lifecycle/gui/node_modules/
+lifecycle/gui/dist/
+lifecycle/server/node_modules/
+lifecycle/server/dist/
+*.tsbuildinfo
 *.sqlite

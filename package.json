@@ -9,7 +9,9 @@
     "tars:lifecycle:submit-approved": "node lifecycle/submit_approved.js",
     "tars:lifecycle:summary": "node lifecycle/send_daily_summary.js",
     "tars:lifecycle:watchdog": "node lifecycle/watchdog.js",
-    "tars:lifecycle:dashboard": "node lifecycle/dashboard.js"
+    "tars:lifecycle:dashboard:install": "npm install --prefix lifecycle/server && npm install --prefix lifecycle/gui",
+    "tars:lifecycle:dashboard:build": "npm --prefix lifecycle/gui run build && npm --prefix lifecycle/server run build",
+    "tars:lifecycle:dashboard": "npm run tars:lifecycle:dashboard:build && npm --prefix lifecycle/server run start"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
