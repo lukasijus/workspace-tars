@@ -27,6 +27,12 @@ const DEFAULT_APPLICANT_FACTS_PATH = path.join(
   "policies",
   "applicant_facts.json",
 );
+const DEFAULT_APPLICANT_PROFILE_PATH = path.join(
+  WORKSPACE_ROOT,
+  "lifecycle",
+  "policies",
+  "applicant_profile.md",
+);
 
 function envString(key, fallback = "") {
   const value = process.env[key];
@@ -43,6 +49,16 @@ function envBoolean(key, fallback = false) {
   const raw = process.env[key];
   if (typeof raw !== "string" || raw.trim() === "") return fallback;
   return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
+function loadTextFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return "";
+  return fs.readFileSync(filePath, "utf8");
+}
+
+function resolveWorkspacePath(filePath) {
+  if (!filePath) return "";
+  return path.isAbsolute(filePath) ? filePath : path.resolve(WORKSPACE_ROOT, filePath);
 }
 
 function deriveNameParts(displayName) {
@@ -94,13 +110,34 @@ const config = {
     "TARS_KEYWORD_EXTRACTOR_OPENAI_CHAT_URL",
     "https://api.openai.com/v1/chat/completions",
   ),
-  applicantPolicyPath: envString(
-    "TARS_LIFECYCLE_APPLICANT_POLICY_PATH",
-    DEFAULT_APPLICANT_POLICY_PATH,
+  answerResolverMode: envString("TARS_APPLICATION_ANSWER_MODE", "hybrid"),
+  answerResolverModel: envString("TARS_APPLICATION_ANSWER_MODEL"),
+  answerResolverCommand: envString("TARS_APPLICATION_ANSWER_COMMAND"),
+  answerResolverOpenAiApiKey: envString(
+    "TARS_APPLICATION_ANSWER_OPENAI_API_KEY",
+    envString("OPENAI_API_KEY"),
   ),
-  applicantFactsPath: envString(
-    "TARS_LIFECYCLE_APPLICANT_FACTS_PATH",
-    DEFAULT_APPLICANT_FACTS_PATH,
+  answerResolverOpenAiChatUrl: envString(
+    "TARS_APPLICATION_ANSWER_OPENAI_CHAT_URL",
+    "https://api.openai.com/v1/chat/completions",
+  ),
+  applicantPolicyPath: resolveWorkspacePath(
+    envString(
+      "TARS_LIFECYCLE_APPLICANT_POLICY_PATH",
+      DEFAULT_APPLICANT_POLICY_PATH,
+    ),
+  ),
+  applicantFactsPath: resolveWorkspacePath(
+    envString(
+      "TARS_LIFECYCLE_APPLICANT_FACTS_PATH",
+      DEFAULT_APPLICANT_FACTS_PATH,
+    ),
+  ),
+  applicantProfilePath: resolveWorkspacePath(
+    envString(
+      "TARS_LIFECYCLE_APPLICANT_PROFILE_PATH",
+      DEFAULT_APPLICANT_PROFILE_PATH,
+    ),
   ),
   summaryEmailTo: envString("TARS_LIFECYCLE_SUMMARY_EMAIL_TO"),
   summaryEmailFrom: envString("TARS_LIFECYCLE_SUMMARY_EMAIL_FROM"),
@@ -136,6 +173,7 @@ const config = {
 
 config.applicantPolicy = loadApplicantPolicy(config.applicantPolicyPath);
 config.applicantFacts = loadApplicantFacts(config.applicantFactsPath);
+config.applicantProfileText = loadTextFile(config.applicantProfilePath);
 
 function assertDatabaseUrl() {
   if (!config.databaseUrl) {

@@ -13,8 +13,8 @@ const {
 const { normalizeText } = require("./applicant-policy");
 const {
   buildQuestionText,
-  resolveFieldAnswer,
-  annotateResolvedField,
+  resolveFieldAnswerAsync,
+  annotateResolvedFieldAsync,
 } = require("./question-engine");
 const { FLOW_TYPE } = require("./state");
 const fs = require("fs");
@@ -180,9 +180,11 @@ function inferProviderFromUrl(targetUrl, frameUrl) {
   return "custom_generic";
 }
 
-function annotateExternalStepFields(step, application = null) {
-  const annotatedFields = (step.fields || []).map((field) =>
-    annotateResolvedField(field, { application }),
+async function annotateExternalStepFields(step, application = null) {
+  const annotatedFields = await Promise.all(
+    (step.fields || []).map((field) =>
+      annotateResolvedFieldAsync(field, { application }),
+    ),
   );
   const requiredFields = annotatedFields.filter((field) => field.required);
   const unresolvedFields = requiredFields.filter(
@@ -490,7 +492,7 @@ async function collectContextCandidates(page, targetUrl, application = null) {
       const providerHint = inferProviderFromUrl(targetUrl, step.url);
       extracted.push({
         ...candidate,
-        step: annotateExternalStepFields(
+        step: await annotateExternalStepFields(
           {
             ...step,
             providerHint,
@@ -549,8 +551,9 @@ function externalPhoneValue(field) {
   return local;
 }
 
-function resolveApplicantValue(field, application = {}) {
-  const resolution = resolveFieldAnswer(field, { application });
+async function resolveApplicantValue(field, application = {}) {
+  const resolution = await resolveFieldAnswerAsync(field, { application });
+  if (!resolution.autoAnswerable && field.type !== "file") return "";
   if (!resolution.answer) return "";
   if (/phone|mobile|telephone|nationalnumber/.test(normalizeText(buildQuestionText(field)))) {
     return externalPhoneValue({
@@ -936,7 +939,9 @@ async function submitExternalCustom(job, application, options = {}) {
       const unresolved = [];
       for (const field of fields) {
         if (!field.required || field.valuePresent) continue;
-        const desiredValue = field.resolvedAnswer || resolveApplicantValue(field, application);
+        const desiredValue = field.autoAnswerable
+          ? field.resolvedAnswer || await resolveApplicantValue(field, application)
+          : "";
         if (!field.autoAnswerable && !desiredValue && field.type !== "file") {
           unresolved.push(field);
           continue;

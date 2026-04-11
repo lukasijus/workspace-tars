@@ -15,6 +15,7 @@ import {
   Typography,
 } from "@mui/material";
 import { ActionButton } from "../components/ActionButton";
+import { AnswerDecisionsCard } from "../components/AnswerDecisionsCard";
 import { ArtifactPreview } from "../components/ArtifactPreview";
 import { CvPreviewCard } from "../components/CvPreviewCard";
 import { JsonPanel } from "../components/JsonPanel";
@@ -259,6 +260,8 @@ export function ApplicationPage() {
         extraction={app.keyword_extraction}
         status={app.keyword_extraction_status}
       />
+
+      <AnswerDecisionsCard decisions={detail.answerDecisions || []} />
 
       <JsonPanel title="Artifacts" value={detail.artifacts} />
       <JsonPanel title="Steps" value={detail.steps} />

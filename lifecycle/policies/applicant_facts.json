@@ -23,6 +23,19 @@
     "clickhouseAtScale": false,
     "distributedBackendSystemsGo": false,
     "highScaleTelemetryPipelines": false,
+    "years": {
+      "commercialSoftwareEngineering": 10,
+      "softwareEngineering": 10,
+      "fullStack": 7,
+      "javascriptTypescript": 7,
+      "typescript": 7,
+      "javascript": 7,
+      "react": 4,
+      "python": 7,
+      "computerVision": 10,
+      "machineVision": 10,
+      "go": 0
+    },
     "skills": {
       "javascript": true,
       "typescript": true,

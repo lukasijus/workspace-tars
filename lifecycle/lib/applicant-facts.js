@@ -25,8 +25,8 @@ function loadApplicantFacts(factsPath) {
       willingToRelocate: true,
     },
     links: {
-      personalWebsite: "",
-      portfolioUrl: "",
+      personalWebsite: "lukasrimkus.me",
+      portfolioUrl: "https://github.com/lukasijus",
     },
   };
 

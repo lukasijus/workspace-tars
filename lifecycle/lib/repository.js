@@ -330,6 +330,57 @@ async function insertApplicationStep(client, applicationId, workerRunId, step, s
   return result.rows[0];
 }
 
+async function insertApplicationAnswerDecisions(client, applicationId, workerRunId, decisions = []) {
+  const rows = [];
+  for (const decision of decisions || []) {
+    if (!decision || typeof decision !== 'object') continue;
+    const result = await client.query(
+      `INSERT INTO application_answer_decisions (
+        application_id,
+        worker_run_id,
+        question_key,
+        question_text,
+        field_label,
+        field_type,
+        answer,
+        confidence,
+        source,
+        source_evidence,
+        reason,
+        risk_level,
+        should_auto_fill,
+        requires_human_review,
+        resolver_mode,
+        metadata
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11, $12, $13, $14, $15, $16::jsonb
+      )
+      RETURNING *`,
+      [
+        applicationId,
+        workerRunId || null,
+        decision.questionKey || 'unknown_question',
+        decision.questionText || null,
+        decision.fieldLabel || null,
+        decision.fieldType || null,
+        decision.answer == null ? null : String(decision.answer),
+        Number.isFinite(Number(decision.confidence)) ? Number(decision.confidence) : null,
+        decision.source || null,
+        decision.sourceEvidence || null,
+        decision.reason || null,
+        decision.riskLevel || null,
+        Boolean(decision.shouldAutoFill),
+        Boolean(decision.requiresHumanReview),
+        decision.resolverMode || null,
+        JSON.stringify(decision.metadata || {}),
+      ],
+    );
+    rows.push(result.rows[0]);
+  }
+  return rows;
+}
+
 async function setApprovalState(client, applicationId, params) {
   const state = params.state;
   await client.query(
@@ -463,7 +514,7 @@ async function fetchApplicationDetail(client, applicationId) {
   );
   if (application.rowCount === 0) return null;
 
-  const [steps, artifacts] = await Promise.all([
+  const [steps, artifacts, answerDecisions] = await Promise.all([
     client.query(
       `SELECT * FROM application_steps
       WHERE application_id = $1
@@ -476,12 +527,21 @@ async function fetchApplicationDetail(client, applicationId) {
       ORDER BY created_at DESC`,
       [applicationId],
     ),
+    client.query(
+      `SELECT *
+      FROM application_answer_decisions
+      WHERE application_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT 100`,
+      [applicationId],
+    ),
   ]);
 
   return {
     application: application.rows[0],
     steps: steps.rows,
     artifacts: artifacts.rows,
+    answerDecisions: answerDecisions.rows,
   };
 }
 
@@ -758,6 +818,7 @@ module.exports = {
   upsertApplication,
   updateApplicationStatus,
   insertApplicationStep,
+  insertApplicationAnswerDecisions,
   setApprovalState,
   findApplicationsForApproval,
   findApprovedApplications,

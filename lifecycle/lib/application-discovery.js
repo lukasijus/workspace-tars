@@ -15,7 +15,10 @@ const {
 } = require("./utils");
 const { FLOW_TYPE } = require("./state");
 const { inspectExternalFlow } = require("./external-apply");
-const { resolveFieldAnswer, annotateResolvedField } = require("./question-engine");
+const {
+  resolveFieldAnswerAsync,
+  annotateResolvedFieldAsync,
+} = require("./question-engine");
 
 function classifyExternalUrl(targetUrl) {
   if (!targetUrl) return FLOW_TYPE.UNKNOWN;
@@ -308,8 +311,8 @@ function normalizePhoneValue(field, value) {
   return normalized;
 }
 
-function getApplicantAutofillValue(field) {
-  const resolution = resolveFieldAnswer(field);
+async function getApplicantAutofillValue(field) {
+  const resolution = await resolveFieldAnswerAsync(field);
   if (!resolution.answer) return "";
   if (/mobile phone number|phone number|nationalnumber|phone/.test(fieldSearchText(field))) {
     return normalizePhoneValue(field, resolution.answer);
@@ -317,16 +320,14 @@ function getApplicantAutofillValue(field) {
   return resolution.answer;
 }
 
-function annotateEasyApplyFields(fields = []) {
-  return fields.map((field) => annotateResolvedField(field));
+async function annotateEasyApplyFields(fields = [], options = {}) {
+  return Promise.all(fields.map((field) => annotateResolvedFieldAsync(field, options)));
 }
 
-function getUnfillableRequiredFields(fields = []) {
-  return fields.filter(
-    (field) =>
-      field.required &&
-      !field.valuePresent &&
-      !annotateResolvedField(field).autoAnswerable,
+async function getUnfillableRequiredFields(fields = [], options = {}) {
+  const annotatedFields = await annotateEasyApplyFields(fields, options);
+  return annotatedFields.filter(
+    (field) => field.required && !field.valuePresent && !field.autoAnswerable,
   );
 }
 
@@ -517,12 +518,16 @@ async function setEasyApplyFieldValue(page, field, value) {
   return true;
 }
 
-async function autofillEasyApplyFields(page, fields = []) {
+async function autofillEasyApplyFields(page, fields = [], options = {}) {
   const filled = [];
   const skipped = [];
+  const answerDecisions = [];
 
   for (const field of fields) {
-    const resolvedField = annotateResolvedField(field);
+    const resolvedField = await annotateResolvedFieldAsync(field, options);
+    if (resolvedField.answerDecision) {
+      answerDecisions.push(resolvedField.answerDecision);
+    }
     const value = resolvedField.resolvedAnswer;
     if (!resolvedField.autoAnswerable || !value) {
       skipped.push({
@@ -549,7 +554,7 @@ async function autofillEasyApplyFields(page, fields = []) {
     }
   }
 
-  return { filled, skipped };
+  return { filled, skipped, answerDecisions };
 }
 
 async function closeEasyApplyModal(page) {
@@ -661,9 +666,13 @@ async function discoverApplicationFlow(job, options = {}) {
 
       await easyButton.click();
       const state = await extractEasyApplyState(page);
-      const annotatedFields = annotateEasyApplyFields(state?.fields || []);
-      const unfillableRequiredFields =
-        getUnfillableRequiredFields(annotatedFields);
+      const annotatedFields = await annotateEasyApplyFields(state?.fields || [], {
+        application: options.application || null,
+      });
+      const unfillableRequiredFields = await getUnfillableRequiredFields(
+        annotatedFields,
+        { application: options.application || null },
+      );
       await closeEasyApplyModal(page);
       return {
         ok: true,
@@ -741,6 +750,7 @@ async function discoverApplicationFlow(job, options = {}) {
 async function submitEasyApply(job, application, options = {}) {
   let context;
   let artifacts = null;
+  const answerDecisions = [];
   try {
     context = await launchPersistentContext({
       headed: Boolean(options.headed),
@@ -852,14 +862,20 @@ async function submitEasyApply(job, application, options = {}) {
       }
 
       if (state?.emptyRequiredFields?.length) {
-        await autofillEasyApplyFields(page, state.emptyRequiredFields || []);
+        const fillResult = await autofillEasyApplyFields(
+          page,
+          state.emptyRequiredFields || [],
+          { application },
+        );
+        answerDecisions.push(...(fillResult.answerDecisions || []));
         await page.waitForTimeout(800);
         state = await extractEasyApplyState(page);
       }
 
       if (state?.emptyRequiredFields?.length) {
-        const annotatedFields = annotateEasyApplyFields(
+        const annotatedFields = await annotateEasyApplyFields(
           state.emptyRequiredFields || [],
+          { application },
         );
         artifacts = await savePageArtifacts(
           page,
@@ -872,6 +888,7 @@ async function submitEasyApply(job, application, options = {}) {
           errorClass: "form",
           reason: "Application requires additional answers before submission",
           fields: annotatedFields,
+          answerDecisions,
           artifacts,
           jobActive: true,
         };
@@ -891,6 +908,7 @@ async function submitEasyApply(job, application, options = {}) {
           ok: true,
           status: "submitted",
           reason: "LinkedIn Easy Apply submitted",
+          answerDecisions,
           artifacts,
           jobActive: true,
         };

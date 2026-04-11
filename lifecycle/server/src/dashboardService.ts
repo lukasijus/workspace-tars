@@ -20,12 +20,14 @@ const {
   fetchDashboardStats,
   findApplicationsForApproval,
   insertApplicationStep,
+  insertApplicationAnswerDecisions,
   setApprovalState,
   updateApplicationStatus,
   updateJobAvailability,
 } = repository;
 const { discoverApplicationFlow } = applicationDiscovery;
 const { runSubmitApproved } = submitApprovedModule;
+const { collectAnswerDecisions } = require("../../lib/answer-decisions.js");
 
 const IMAGE_ARTIFACT_KINDS = new Set(["submission_screenshot", "discovery_screenshot"]);
 const HTML_ARTIFACT_KINDS = new Set(["submission_html", "discovery_html"]);
@@ -277,6 +279,7 @@ export async function fetchApplication(applicationId: ApplicationId): Promise<Ap
     application: summarizeRow(detail.application),
     steps: detail.steps,
     artifacts: detail.artifacts,
+    answerDecisions: detail.answerDecisions || [],
     latestImageArtifact: findLatestArtifact(detail.artifacts, IMAGE_ARTIFACT_KINDS),
     latestHtmlArtifact: findLatestArtifact(detail.artifacts, HTML_ARTIFACT_KINDS),
     latestCvArtifact: findLatestArtifact(detail.artifacts, CV_ARTIFACT_KINDS),
@@ -385,6 +388,13 @@ async function runRetryDiscoveryForApplication(current: ApplicationRow) {
         unresolvedFields: discovery.unresolvedFields || [],
         externalStep: discovery.discoveredFields || null,
       },
+    );
+
+    await insertApplicationAnswerDecisions(
+      client,
+      updated.id,
+      null,
+      collectAnswerDecisions(discovery),
     );
 
     if (discovery.artifacts?.screenshotPath) {
