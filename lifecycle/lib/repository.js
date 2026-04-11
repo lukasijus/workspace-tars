@@ -516,6 +516,200 @@ async function upsertDailySummary(client, params) {
   return result.rows[0];
 }
 
+async function createSchedulerRun(client, params) {
+  const result = await client.query(
+    `INSERT INTO scheduler_runs (
+      status,
+      total_runs,
+      completed_runs,
+      items_per_run,
+      gap_minutes,
+      current_run,
+      started_at,
+      summary
+    ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7::jsonb)
+    RETURNING *`,
+    [
+      params.status,
+      params.totalRuns,
+      params.completedRuns || 0,
+      params.itemsPerRun,
+      params.gapMinutes || 0,
+      params.currentRun || null,
+      JSON.stringify(params.summary || {}),
+    ],
+  );
+  return result.rows[0];
+}
+
+async function updateSchedulerRun(client, schedulerRunId, params = {}) {
+  const sets = ['updated_at = NOW()'];
+  const values = [schedulerRunId];
+  const addValue = (value) => {
+    values.push(value);
+    return `$${values.length}`;
+  };
+
+  if (Object.prototype.hasOwnProperty.call(params, 'status')) {
+    sets.push(`status = ${addValue(params.status)}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(params, 'completedRuns')) {
+    sets.push(`completed_runs = ${addValue(params.completedRuns)}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(params, 'currentRun')) {
+    sets.push(`current_run = ${addValue(params.currentRun)}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(params, 'activeRunStartedAt')) {
+    sets.push(`active_run_started_at = ${addValue(params.activeRunStartedAt)}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(params, 'nextRunAt')) {
+    sets.push(`next_run_at = ${addValue(params.nextRunAt)}`);
+  }
+  if (params.markFinished) {
+    sets.push('finished_at = NOW()');
+  }
+  if (params.cancelRequested) {
+    sets.push('cancel_requested = TRUE');
+  }
+  if (Object.prototype.hasOwnProperty.call(params, 'lastError')) {
+    sets.push(`last_error = ${addValue(params.lastError)}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(params, 'summary')) {
+    sets.push(`summary = COALESCE(summary, '{}'::jsonb) || ${addValue(JSON.stringify(params.summary || {}))}::jsonb`);
+  }
+
+  const result = await client.query(
+    `UPDATE scheduler_runs
+    SET ${sets.join(',\n        ')}
+    WHERE id = $1
+    RETURNING *`,
+    values,
+  );
+  return result.rows[0];
+}
+
+async function createSchedulerRunItem(client, params) {
+  const result = await client.query(
+    `INSERT INTO scheduler_run_items (
+      scheduler_run_id,
+      run_number,
+      status,
+      started_at,
+      summary
+    ) VALUES ($1, $2, $3, NOW(), $4::jsonb)
+    ON CONFLICT (scheduler_run_id, run_number) DO UPDATE
+    SET status = EXCLUDED.status,
+        started_at = NOW(),
+        finished_at = NULL,
+        duration_ms = NULL,
+        exit_code = NULL,
+        signal = NULL,
+        error = NULL,
+        stderr_tail = NULL,
+        summary = EXCLUDED.summary,
+        updated_at = NOW()
+    RETURNING *`,
+    [
+      params.schedulerRunId,
+      params.runNumber,
+      params.status,
+      JSON.stringify(params.summary || {}),
+    ],
+  );
+  return result.rows[0];
+}
+
+async function finishSchedulerRunItem(client, schedulerRunItemId, params = {}) {
+  const result = await client.query(
+    `UPDATE scheduler_run_items
+    SET status = $2,
+        worker_run_id = COALESCE($3, worker_run_id),
+        finished_at = NOW(),
+        duration_ms = GREATEST(
+          0,
+          FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000)::bigint
+        ),
+        exit_code = $4,
+        signal = $5,
+        error = $6,
+        stderr_tail = $7,
+        summary = COALESCE(summary, '{}'::jsonb) || $8::jsonb,
+        updated_at = NOW()
+    WHERE id = $1
+    RETURNING *`,
+    [
+      schedulerRunItemId,
+      params.status,
+      params.workerRunId || null,
+      typeof params.exitCode === 'number' ? params.exitCode : null,
+      params.signal || null,
+      params.error || null,
+      params.stderrTail || null,
+      JSON.stringify(params.summary || {}),
+    ],
+  );
+  return result.rows[0];
+}
+
+async function markInterruptedSchedulerRuns(client) {
+  const childResult = await client.query(
+    `UPDATE scheduler_run_items
+    SET status = 'interrupted',
+        finished_at = COALESCE(finished_at, NOW()),
+        duration_ms = CASE
+          WHEN duration_ms IS NULL THEN GREATEST(
+            0,
+            FLOOR(EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000)::bigint
+          )
+          ELSE duration_ms
+        END,
+        error = COALESCE(error, 'Dashboard server restarted before scheduler completed.'),
+        updated_at = NOW()
+    WHERE status = 'running'
+      AND scheduler_run_id IN (
+        SELECT id
+        FROM scheduler_runs
+        WHERE status IN ('running', 'waiting')
+      )
+    RETURNING *`,
+  );
+
+  const result = await client.query(
+    `UPDATE scheduler_runs
+    SET status = 'interrupted',
+        finished_at = COALESCE(finished_at, NOW()),
+        next_run_at = NULL,
+        active_run_started_at = NULL,
+        current_run = NULL,
+        last_error = COALESCE(last_error, 'Dashboard server restarted before scheduler completed.'),
+        updated_at = NOW()
+    WHERE status IN ('running', 'waiting')
+    RETURNING *`,
+  );
+  return {
+    schedulerRuns: result.rows,
+    schedulerRunItems: childResult.rows,
+  };
+}
+
+async function fetchSchedulerRuns(client, limit = 20) {
+  const result = await client.query(
+    `SELECT
+      scheduler_runs.*,
+      COALESCE(items.items, '[]'::jsonb) AS items
+    FROM scheduler_runs
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(to_jsonb(scheduler_run_items.*) ORDER BY run_number ASC) AS items
+      FROM scheduler_run_items
+      WHERE scheduler_run_id = scheduler_runs.id
+    ) AS items ON TRUE
+    ORDER BY scheduler_runs.started_at DESC
+    LIMIT $1`,
+    [limit],
+  );
+  return result.rows;
+}
+
 module.exports = {
   createWorkerRun,
   heartbeatWorkerRun,
@@ -533,4 +727,10 @@ module.exports = {
   fetchApplicationDetail,
   fetchDashboardStats,
   upsertDailySummary,
+  createSchedulerRun,
+  updateSchedulerRun,
+  createSchedulerRunItem,
+  finishSchedulerRunItem,
+  markInterruptedSchedulerRuns,
+  fetchSchedulerRuns,
 };

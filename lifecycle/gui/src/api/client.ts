@@ -1,4 +1,10 @@
-import type { ApplicationDetail, DashboardData, Id } from "../types";
+import type {
+  ApplicationDetail,
+  DashboardData,
+  Id,
+  SchedulerStartRequest,
+  SchedulerStatus,
+} from "../types";
 
 export class ApiError extends Error {
   status: number;
@@ -31,7 +37,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-function post<T>(url: string, body: Record<string, unknown> = {}) {
+function post<T>(url: string, body: unknown = {}) {
   return requestJson<T>(url, {
     method: "POST",
     body: JSON.stringify(body),
@@ -40,6 +46,24 @@ function post<T>(url: string, body: Record<string, unknown> = {}) {
 
 export function fetchDashboard() {
   return requestJson<DashboardData>("/api/dashboard");
+}
+
+export async function fetchSchedulerStatus() {
+  const response = await requestJson<{ ok: true; scheduler: SchedulerStatus }>("/api/scheduler");
+  return response.scheduler;
+}
+
+export async function startScheduler(payload: SchedulerStartRequest) {
+  const response = await post<{ ok: true; scheduler: SchedulerStatus }>(
+    "/api/scheduler/start",
+    payload,
+  );
+  return response.scheduler;
+}
+
+export async function cancelScheduler() {
+  const response = await post<{ ok: true; scheduler: SchedulerStatus }>("/api/scheduler/cancel");
+  return response.scheduler;
 }
 
 export async function fetchApplication(id: Id) {

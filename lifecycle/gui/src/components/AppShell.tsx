@@ -1,11 +1,13 @@
-import { useState, type PropsWithChildren } from "react";
+import { useEffect, useState, type PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import AssignmentOutlinedIcon from "@mui/icons-material/AssignmentOutlined";
 import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
+import EventRepeatOutlinedIcon from "@mui/icons-material/EventRepeatOutlined";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
 import {
   AppBar,
   Box,
+  Chip,
   Container,
   Divider,
   Drawer,
@@ -18,7 +20,9 @@ import {
   Toolbar,
   Typography,
 } from "@mui/material";
+import { fetchSchedulerStatus } from "../api/client";
 import { isNavigationItemActive, navigationItems } from "../navigation";
+import type { SchedulerStatus } from "../types";
 
 const drawerWidth = 292;
 
@@ -27,11 +31,54 @@ function applicationIdFromPath(pathname: string) {
   return match?.[1] || null;
 }
 
+function formatSchedulerTime(value: string | null) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function schedulerChipLabel(status: SchedulerStatus | null) {
+  if (!status) return null;
+  if (status.running && status.phase === "waiting") {
+    return `Scheduler waiting ${status.completedRuns}/${status.totalRuns} · next ${formatSchedulerTime(status.nextRunAt)}`;
+  }
+  if (status.running) {
+    return `Scheduler running ${status.currentRun || status.completedRuns + 1}/${status.totalRuns}`;
+  }
+  if (status.phase === "failed") {
+    return "Scheduler failed";
+  }
+  return null;
+}
+
 export function AppShell({ children }: PropsWithChildren) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const currentApplicationId = applicationIdFromPath(location.pathname);
+  const schedulerLabel = schedulerChipLabel(schedulerStatus);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSchedulerStatus = async () => {
+      try {
+        const nextStatus = await fetchSchedulerStatus();
+        if (!cancelled) setSchedulerStatus(nextStatus);
+      } catch {
+        if (!cancelled) setSchedulerStatus(null);
+      }
+    };
+
+    void loadSchedulerStatus();
+    const timer = window.setInterval(() => void loadSchedulerStatus(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const handleNavigate = (path: string) => {
     navigate(path);
@@ -90,7 +137,11 @@ export function AppShell({ children }: PropsWithChildren) {
               }}
             >
               <ListItemIcon sx={{ minWidth: 38, color: "inherit" }}>
-                <DashboardOutlinedIcon fontSize="small" />
+                {item.path === "/scheduler" ? (
+                  <EventRepeatOutlinedIcon fontSize="small" />
+                ) : (
+                  <DashboardOutlinedIcon fontSize="small" />
+                )}
               </ListItemIcon>
               <ListItemText
                 primary={
@@ -214,14 +265,29 @@ export function AppShell({ children }: PropsWithChildren) {
         }}
       >
         <Stack spacing={3}>
-          <Box>
-            <Typography variant="h3" component="h1">
-              Tars Lifecycle Dashboard
-            </Typography>
-            <Typography color="text.secondary">
-              Local operator surface for approvals, latest workflow snapshots, and application health.
-            </Typography>
-          </Box>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={1.5}
+            sx={{ alignItems: { xs: "flex-start", sm: "center" }, justifyContent: "space-between" }}
+          >
+            <Box>
+              <Typography variant="h3" component="h1">
+                Tars Lifecycle Dashboard
+              </Typography>
+              <Typography color="text.secondary">
+                Local operator surface for approvals, latest workflow snapshots, and application health.
+              </Typography>
+            </Box>
+            {schedulerLabel ? (
+              <Chip
+                clickable
+                label={schedulerStatus?.cancelRequested ? "Scheduler stopping" : schedulerLabel}
+                color={schedulerStatus?.phase === "failed" ? "error" : "info"}
+                variant={schedulerStatus?.running ? "filled" : "outlined"}
+                onClick={() => handleNavigate("/scheduler")}
+              />
+            ) : null}
+          </Stack>
           {children}
         </Stack>
       </Container>

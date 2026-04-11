@@ -10,6 +10,11 @@ export const navigationItems: NavigationItem[] = [
     path: "/",
     match: "exact",
   },
+  {
+    label: "Scheduler",
+    path: "/scheduler",
+    match: "exact",
+  },
 ];
 
 export function isNavigationItemActive(pathname: string, item: NavigationItem) {

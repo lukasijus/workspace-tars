@@ -17,6 +17,13 @@ import {
   retryDiscoveryAll,
   submitApproved,
 } from "./dashboardService";
+import {
+  cancelScheduler,
+  getSchedulerStatus,
+  initializeSchedulerHistory,
+  shutdownScheduler,
+  startScheduler,
+} from "./schedulerService";
 
 const { applyMigrations, closePool } = db;
 
@@ -63,6 +70,7 @@ function sendLocalFile(response: Response, filePath: string) {
 
 async function createApp() {
   await applyMigrations();
+  await initializeSchedulerHistory();
 
   const app = express();
   app.disable("x-powered-by");
@@ -71,6 +79,27 @@ async function createApp() {
 
   app.get("/api/dashboard", asyncRoute(async (_request, response) => {
     response.json(await fetchDashboard());
+  }));
+
+  app.get("/api/scheduler", asyncRoute(async (_request, response) => {
+    response.json({
+      ok: true,
+      scheduler: await getSchedulerStatus(),
+    });
+  }));
+
+  app.post("/api/scheduler/start", asyncRoute(async (request, response) => {
+    response.json({
+      ok: true,
+      scheduler: await startScheduler(request.body || {}),
+    });
+  }));
+
+  app.post("/api/scheduler/cancel", asyncRoute(async (_request, response) => {
+    response.json({
+      ok: true,
+      scheduler: await cancelScheduler(),
+    });
   }));
 
   app.get("/api/applications/:id", asyncRoute(async (request, response) => {
@@ -180,6 +209,7 @@ async function main() {
   });
 
   const shutdown = async () => {
+    await shutdownScheduler();
     server.close(async () => {
       await closePool().catch(() => {});
       process.exit(0);

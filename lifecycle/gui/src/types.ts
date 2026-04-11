@@ -79,3 +79,84 @@ export interface ApplicationDetail {
   latestHtmlArtifact: ArtifactRow | null;
   availableActions: Record<string, boolean>;
 }
+
+export type SchedulerPhase =
+  | "idle"
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+export interface SchedulerRunRecord {
+  runNumber: number;
+  status: "running" | "succeeded" | "failed" | "interrupted";
+  startedAt: string;
+  finishedAt: string | null;
+  exitCode: number | null;
+  signal: string | null;
+  summary: unknown;
+  error: string | null;
+  stderrTail: string;
+}
+
+export interface SchedulerPersistedRunItem {
+  id: Id;
+  schedulerRunId: Id;
+  workerRunId: Id | null;
+  runNumber: number;
+  status: "running" | "succeeded" | "failed" | "interrupted";
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  exitCode: number | null;
+  signal: string | null;
+  error: string | null;
+  stderrTail: string | null;
+  summary: unknown;
+}
+
+export interface SchedulerPersistedRun {
+  id: Id;
+  status: SchedulerPhase;
+  totalRuns: number;
+  completedRuns: number;
+  itemsPerRun: number;
+  gapMinutes: number;
+  currentRun: number | null;
+  startedAt: string | null;
+  activeRunStartedAt: string | null;
+  nextRunAt: string | null;
+  finishedAt: string | null;
+  cancelRequested: boolean;
+  lastError: string | null;
+  summary: unknown;
+  items: SchedulerPersistedRunItem[];
+}
+
+export interface SchedulerStatus {
+  schedulerRunId: Id | null;
+  running: boolean;
+  phase: SchedulerPhase;
+  totalRuns: number;
+  completedRuns: number;
+  currentRun: number | null;
+  itemsPerRun: number;
+  gapMinutes: number;
+  startedAt: string | null;
+  activeRunStartedAt: string | null;
+  nextRunAt: string | null;
+  finishedAt: string | null;
+  cancelRequested: boolean;
+  lastResult: unknown;
+  lastError: string | null;
+  history: SchedulerRunRecord[];
+  persistedRuns: SchedulerPersistedRun[];
+}
+
+export interface SchedulerStartRequest {
+  runCount: number;
+  itemsPerRun: number;
+  gapMinutes: number;
+}
