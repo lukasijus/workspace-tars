@@ -175,6 +175,87 @@ async function saveDebugArtifacts(page, searchName) {
   };
 }
 
+async function expandJobDescription(page) {
+  const selectors = [
+    'button.jobs-description__footer-button',
+    '.jobs-description__footer-button',
+    'button[aria-label*="description" i]',
+    'button:has-text("Show more")',
+    'button:has-text("See more")',
+  ];
+
+  for (const selector of selectors) {
+    const button = page.locator(selector).first();
+    if (!(await button.count())) continue;
+    if (!(await button.isVisible().catch(() => false))) continue;
+    await button.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    return;
+  }
+}
+
+async function extractJobDescription(page) {
+  return page.evaluate(() => {
+    const normalizeText = (value) => String(value || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    const selectors = [
+      '.jobs-description__content',
+      '.jobs-box__html-content',
+      '.jobs-description-content__text',
+      '#job-details',
+      '[class*="jobs-description"]',
+    ];
+
+    for (const selector of selectors) {
+      const node = document.querySelector(selector);
+      const text = normalizeText(node?.innerText || node?.textContent || '');
+      if (text.length > 120) {
+        return {
+          descriptionText: text,
+          descriptionHtml: node?.innerHTML || null,
+        };
+      }
+    }
+
+    const bodyText = normalizeText(document.body?.innerText || '');
+    return {
+      descriptionText: bodyText.length > 120 ? bodyText.slice(0, 20000) : null,
+      descriptionHtml: null,
+    };
+  });
+}
+
+async function enrichJobDescriptions(page, jobs, args) {
+  if (!jobs.length) return;
+
+  logProgress(`Capturing expanded descriptions for ${jobs.length} top jobs`, args);
+  for (const [index, job] of jobs.entries()) {
+    if (!job.link) continue;
+    logProgress(`Description ${index + 1}/${jobs.length}: ${job.company || 'Unknown company'} — ${job.title || 'Untitled role'}`, args);
+    try {
+      await gotoAndSettle(page, job.link);
+      await expandJobDescription(page);
+      const extracted = await extractJobDescription(page);
+      job.descriptionText = extracted.descriptionText || null;
+      job.descriptionHtml = extracted.descriptionHtml || null;
+      job.descriptionFetchedAt = new Date().toISOString();
+      job.descriptionSourceUrl = page.url();
+      job.descriptionFetchStatus = job.descriptionText ? 'ok' : 'empty';
+      if (!job.descriptionText) {
+        job.descriptionError = 'No job description text found after opening job detail page';
+      }
+    } catch (error) {
+      job.descriptionFetchStatus = 'failed';
+      job.descriptionError = error.message;
+      logProgress(`Description capture failed for ${job.jobId || job.link}: ${error.message}`, args);
+    }
+  }
+}
+
 async function scrapeSearch(page, defaults, searchConfig, args) {
   const searchUrl = buildLinkedInJobsUrl(searchConfig, defaults);
   logProgress(`Running LinkedIn search "${searchConfig.name}" -> ${searchUrl}`, args);
@@ -215,7 +296,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
-    console.log(`Usage: node search_jobs.js [--headed] [--search SEARCH_NAME] [--limit N] [--quiet]
+    console.log(`Usage: node search_jobs.js [--headed] [--search SEARCH_NAME] [--limit N] [--description-limit N] [--quiet]
 
 Run the saved LinkedIn searches against Tars's dedicated persistent browser profile.
 Outputs machine-friendly JSON and saves copies under linkedin_search/output/.
@@ -256,6 +337,18 @@ Outputs machine-friendly JSON and saves copies under linkedin_search/output/.
     const deduped = dedupeJobs(results)
       .sort((left, right) => right.fitScore - left.fitScore)
       .slice(0, args.limit || profile.defaults?.limit || 60);
+
+    const descriptionLimit = Number.isInteger(args.descriptionLimit) && args.descriptionLimit > 0
+      ? args.descriptionLimit
+      : profile.defaults?.descriptionLimit || Math.min(10, deduped.length);
+    await enrichJobDescriptions(page, deduped.slice(0, descriptionLimit), args);
+
+    for (const job of deduped) {
+      const fit = computeFitScore(job, profile.fitKeywords || {});
+      job.fitScore = fit.score;
+      job.matchedStrong = fit.matchedStrong;
+      job.matchedBonus = fit.matchedBonus;
+    }
 
     const report = {
       ok: true,

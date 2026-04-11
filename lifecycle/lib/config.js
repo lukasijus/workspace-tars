@@ -83,6 +83,17 @@ const config = {
   ),
   runTimeoutMinutes: envInteger("TARS_LIFECYCLE_RUN_TIMEOUT_MINUTES", 20),
   staleRunMinutes: envInteger("TARS_LIFECYCLE_STALE_RUN_MINUTES", 30),
+  keywordExtractorMode: envString("TARS_KEYWORD_EXTRACTOR_MODE", "hybrid"),
+  keywordExtractorModel: envString("TARS_KEYWORD_EXTRACTOR_MODEL"),
+  keywordExtractorCommand: envString("TARS_KEYWORD_EXTRACTOR_COMMAND"),
+  keywordExtractorOpenAiApiKey: envString(
+    "TARS_KEYWORD_EXTRACTOR_OPENAI_API_KEY",
+    envString("OPENAI_API_KEY"),
+  ),
+  keywordExtractorOpenAiChatUrl: envString(
+    "TARS_KEYWORD_EXTRACTOR_OPENAI_CHAT_URL",
+    "https://api.openai.com/v1/chat/completions",
+  ),
   applicantPolicyPath: envString(
     "TARS_LIFECYCLE_APPLICANT_POLICY_PATH",
     DEFAULT_APPLICANT_POLICY_PATH,

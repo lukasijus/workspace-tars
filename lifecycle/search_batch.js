@@ -29,6 +29,7 @@ const {
   setApprovalState,
 } = require('./lib/repository');
 const { discoverApplicationFlow } = require('./lib/application-discovery');
+const { extractJobKeywords } = require('./lib/job-keyword-extraction');
 
 function parseArgs(argv) {
   const args = {
@@ -103,17 +104,38 @@ function decideApplicationOutcome(discovery) {
   };
 }
 
-async function runLinkedInSearch({ headed = false } = {}) {
+async function runLinkedInSearch({ headed = false, descriptionLimit = null } = {}) {
   const args = [
     path.join(config.workspaceRoot, 'linkedin_search', 'search_jobs.js'),
   ];
   if (headed) {
     args.push('--headed');
   }
+  if (Number.isInteger(descriptionLimit) && descriptionLimit > 0) {
+    args.push('--description-limit', String(descriptionLimit));
+  }
   const { stdout } = await runCommand(process.execPath, args, {
     streamStderr: true,
   });
   return JSON.parse(stdout);
+}
+
+async function enrichSearchReportKeywords(searchReport, limit) {
+  const results = Array.isArray(searchReport.results) ? searchReport.results : [];
+  const described = results.filter((result) => result.descriptionText);
+  const selected = described.length > 0
+    ? described
+    : results.filter((result) => result.title).slice(0, Math.max(1, limit || results.length));
+
+  if (selected.length === 0) return;
+
+  logPhase(`Extracting job keywords for ${selected.length} job results`);
+  for (const result of selected) {
+    const keywordResult = await extractJobKeywords(result);
+    result.keywordExtractionStatus = keywordResult.status;
+    result.keywordExtractedAt = keywordResult.extractedAt;
+    result.keywordExtraction = keywordResult.extraction;
+  }
 }
 
 async function generateCvVariants(shortlistPath, limit) {
@@ -147,7 +169,15 @@ async function main() {
       limit: args.limit,
     }));
     logPhase('Starting LinkedIn search batch');
-    const searchReport = await runLinkedInSearch({ headed: args.headed });
+    const searchReport = await runLinkedInSearch({
+      headed: args.headed,
+      descriptionLimit: Math.min(Math.max(args.limit * 3, 10), 30),
+    });
+    await withTransaction((client) => heartbeatWorkerRun(client, workerRun.id, {
+      phase: 'keyword_extraction',
+      limit: args.limit,
+    }));
+    await enrichSearchReportKeywords(searchReport, args.limit);
     const searchArtifactPath = writeJsonArtifact('search-runs', searchReport, {
       fileSuffix: 'linkedin-search',
     });

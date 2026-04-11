@@ -18,6 +18,7 @@ import { ActionButton } from "../components/ActionButton";
 import { ArtifactPreview } from "../components/ArtifactPreview";
 import { CvPreviewCard } from "../components/CvPreviewCard";
 import { JsonPanel } from "../components/JsonPanel";
+import { JobKeywordsCard } from "../components/JobKeywordsCard";
 import { StatusChip } from "../components/StatusChip";
 import {
   approveApplication,
@@ -251,6 +252,13 @@ export function ApplicationPage() {
           <JsonPanel title="Latest external step" value={summary || "No external step captured"} />
         </Grid>
       </Grid>
+
+      <JobKeywordsCard
+        descriptionText={app.description_text}
+        extractedAt={app.keyword_extracted_at || app.description_fetched_at}
+        extraction={app.keyword_extraction}
+        status={app.keyword_extraction_status}
+      />
 
       <JsonPanel title="Artifacts" value={detail.artifacts} />
       <JsonPanel title="Steps" value={detail.steps} />

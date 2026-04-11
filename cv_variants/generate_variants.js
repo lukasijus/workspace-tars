@@ -134,10 +134,13 @@ function chooseTrack(job) {
   const primary = [
     job.title,
     job.searchName,
+    ...(job.keywordExtraction?.atsKeywords || []),
+    ...(job.keywordExtraction?.cvHeadlineHints || []),
   ].filter(Boolean).join(' ').toLowerCase();
   const secondary = [
     job.company,
     job.location,
+    job.descriptionText,
   ].filter(Boolean).join(' ').toLowerCase();
 
   if (/(computer vision|machine vision|vision systems|vision engineer|ocr|inspection)/.test(primary)) {
@@ -227,8 +230,50 @@ function replaceSection(tex, sectionName, nextSectionName, body) {
   return tex.replace(pattern, `$1${body}$3`);
 }
 
-function renderVariant(baseTex, job, track) {
+function unique(values) {
+  return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function escapeTex(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\textbackslash{}')
+    .replace(/&/g, '\\&')
+    .replace(/%/g, '\\%')
+    .replace(/\$/g, '\\$')
+    .replace(/#/g, '\\#')
+    .replace(/_/g, '\\_')
+    .replace(/{/g, '\\{')
+    .replace(/}/g, '\\}')
+    .replace(/~/g, '\\textasciitilde{}')
+    .replace(/\^/g, '\\textasciicircum{}');
+}
+
+function buildKeywordAwareProfile(job, track) {
   const profile = TRACK_CONTENT[track] || TRACK_CONTENT.general;
+  const extraction = job.keywordExtraction || {};
+  const matchedStrengths = unique(extraction.matchedCandidateStrengths || []).slice(0, 10);
+  const headlineHints = unique(extraction.cvHeadlineHints || []).slice(0, 3);
+  const summaryParts = [profile.summary];
+  if (headlineHints.length > 0) {
+    summaryParts.push(`Target alignment: ${headlineHints.map(escapeTex).join(' / ')}.`);
+  }
+  if (matchedStrengths.length > 0) {
+    summaryParts.push(`Strongest role match: ${matchedStrengths.map(escapeTex).join(', ')}.`);
+  }
+
+  const skills = [...profile.skills];
+  if (matchedStrengths.length > 0) {
+    skills.push(`\\textbf{Role-specific match:} ${matchedStrengths.map(escapeTex).join(', ')}`);
+  }
+
+  return {
+    summary: summaryParts.join(' '),
+    skills,
+  };
+}
+
+function renderVariant(baseTex, job, track) {
+  const profile = buildKeywordAwareProfile(job, track);
   let tex = baseTex;
   tex = replaceSection(tex, 'Summary', 'Experience', `${profile.summary}`);
   tex = replaceSection(tex, 'Skills', 'Links', profile.skills.join('\n'));
@@ -328,6 +373,10 @@ function main() {
       location: job.location || null,
       searchName: job.searchName || null,
       fitScore: job.fitScore ?? null,
+      keywordExtractionStatus: job.keywordExtractionStatus || null,
+      atsKeywords: job.keywordExtraction?.atsKeywords || [],
+      matchedCandidateStrengths: job.keywordExtraction?.matchedCandidateStrengths || [],
+      cvHeadlineHints: job.keywordExtraction?.cvHeadlineHints || [],
       track,
       stem,
       fileName: `${stem}.pdf`,

@@ -100,10 +100,18 @@ async function upsertJob(client, job, workerRunId, dedupeKey) {
       latest_seen_at,
       last_search_name,
       last_run_id,
-      metadata
+      metadata,
+      description_text,
+      description_html,
+      description_fetched_at,
+      description_source_url,
+      keyword_extraction_status,
+      keyword_extracted_at,
+      keyword_extraction
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9,
-      $10::jsonb, $11::jsonb, NOW(), $12, $13, $14::jsonb
+      $10::jsonb, $11::jsonb, NOW(), $12, $13, $14::jsonb,
+      $15, $16, $17, $18, $19, $20, $21::jsonb
     )
     ON CONFLICT (dedupe_key) DO UPDATE
     SET source = EXCLUDED.source,
@@ -119,7 +127,20 @@ async function upsertJob(client, job, workerRunId, dedupeKey) {
         latest_seen_at = NOW(),
         last_search_name = EXCLUDED.last_search_name,
         last_run_id = EXCLUDED.last_run_id,
-        metadata = COALESCE(jobs.metadata, '{}'::jsonb) || EXCLUDED.metadata
+        metadata = COALESCE(jobs.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+        description_text = COALESCE(EXCLUDED.description_text, jobs.description_text),
+        description_html = COALESCE(EXCLUDED.description_html, jobs.description_html),
+        description_fetched_at = COALESCE(EXCLUDED.description_fetched_at, jobs.description_fetched_at),
+        description_source_url = COALESCE(EXCLUDED.description_source_url, jobs.description_source_url),
+        keyword_extraction_status = CASE
+          WHEN EXCLUDED.keyword_extraction_status = 'not_started' THEN jobs.keyword_extraction_status
+          ELSE EXCLUDED.keyword_extraction_status
+        END,
+        keyword_extracted_at = COALESCE(EXCLUDED.keyword_extracted_at, jobs.keyword_extracted_at),
+        keyword_extraction = CASE
+          WHEN EXCLUDED.keyword_extraction = '{}'::jsonb THEN jobs.keyword_extraction
+          ELSE EXCLUDED.keyword_extraction
+        END
     RETURNING *`,
     [
       dedupeKey,
@@ -137,7 +158,16 @@ async function upsertJob(client, job, workerRunId, dedupeKey) {
       workerRunId,
       JSON.stringify({
         searchUrl: job.searchUrl || null,
+        descriptionFetchStatus: job.descriptionFetchStatus || null,
+        descriptionError: job.descriptionError || null,
       }),
+      job.descriptionText || null,
+      job.descriptionHtml || null,
+      job.descriptionFetchedAt || null,
+      job.descriptionSourceUrl || job.link || null,
+      job.keywordExtractionStatus || (job.keywordExtraction ? 'deterministic' : 'not_started'),
+      job.keywordExtractedAt || null,
+      JSON.stringify(job.keywordExtraction || {}),
     ],
   );
   return result.rows[0];
@@ -413,6 +443,13 @@ async function fetchApplicationDetail(client, applicationId) {
       jobs.latest_fit_score,
       jobs.matched_strong,
       jobs.matched_bonus,
+      jobs.description_text,
+      jobs.description_html,
+      jobs.description_fetched_at,
+      jobs.description_source_url,
+      jobs.keyword_extraction_status,
+      jobs.keyword_extracted_at,
+      jobs.keyword_extraction,
       jobs.is_active,
       jobs.inactive_reason,
       jobs.inactive_detected_at,

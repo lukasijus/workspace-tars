@@ -62,6 +62,7 @@ function parseArgs(argv) {
     headless: false,
     quiet: false,
     limit: null,
+    descriptionLimit: null,
     search: null,
     url: null,
     help: false,
@@ -87,6 +88,11 @@ function parseArgs(argv) {
     }
     if (arg === '--limit') {
       parsed.limit = Number(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === '--description-limit') {
+      parsed.descriptionLimit = Number(argv[index + 1]);
       index += 1;
       continue;
     }
@@ -205,7 +211,7 @@ function buildLinkedInJobsUrl(search, defaults = {}) {
 }
 
 function computeFitScore(job, fitKeywords = {}) {
-  const haystack = `${job.title} ${job.company} ${job.location}`.toLowerCase();
+  const haystack = `${job.title} ${job.company} ${job.location} ${job.descriptionText || ''}`.toLowerCase();
   const matchedStrong = [];
   const matchedBonus = [];
   let score = 0;

@@ -4,7 +4,8 @@
     "sortBy": "DD",
     "workTypes": ["2"],
     "experience": ["4", "5"],
-    "limit": 60
+    "limit": 60,
+    "descriptionLimit": 10
   },
   "fitKeywords": {
     "strong": [

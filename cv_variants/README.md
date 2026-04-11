@@ -55,6 +55,7 @@ The generator currently:
   - `general`
 - rewrites the `Summary` section to fit that track
 - rewrites the `Skills` section to emphasize the most relevant areas
+- uses lifecycle keyword extraction when available to add truthful role-specific match signals
 
 It does **not** yet fully rewrite experience bullets per company/role. That can be layered on later if it proves useful.
 

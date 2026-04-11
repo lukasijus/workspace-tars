@@ -54,6 +54,7 @@ Edit `search_profile.json` to tune:
 - remote vs hybrid filters
 - freshness window
 - fit keywords
+- expanded-description capture limit (`defaults.descriptionLimit`)
 
 ## Notes
 
@@ -61,3 +62,4 @@ Edit `search_profile.json` to tune:
 - The first login is human-assisted once. After that, Tars can relaunch the same profile on his own.
 - If LinkedIn expires the session or triggers a challenge, rerun the browser helper in headed mode and solve it there.
 - Search runs log progress to stderr by default and keep final JSON on stdout.
+- Lifecycle runs pass `--description-limit` for the current shortlist window so top jobs get expanded descriptions without opening every search result.

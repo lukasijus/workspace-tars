@@ -2,6 +2,23 @@ export type JsonMap = Record<string, unknown>;
 
 export type Id = string | number;
 
+export interface JobKeywordExtraction extends JsonMap {
+  source?: string;
+  hardSkills?: string[];
+  frameworks?: string[];
+  tools?: string[];
+  domains?: string[];
+  responsibilities?: string[];
+  softSkills?: string[];
+  senioritySignals?: string[];
+  mustHave?: string[];
+  niceToHave?: string[];
+  atsKeywords?: string[];
+  cvHeadlineHints?: string[];
+  matchedCandidateStrengths?: string[];
+  missingOrWeakSignals?: string[];
+}
+
 export interface ApplicationRow {
   id: Id;
   job_id: Id;
@@ -12,6 +29,13 @@ export interface ApplicationRow {
   title?: string | null;
   location?: string | null;
   source_url?: string | null;
+  description_text?: string | null;
+  description_html?: string | null;
+  description_fetched_at?: string | null;
+  description_source_url?: string | null;
+  keyword_extraction_status?: string | null;
+  keyword_extracted_at?: string | null;
+  keyword_extraction?: JobKeywordExtraction | null;
   external_apply_url?: string | null;
   cv_variant_file_name?: string | null;
   draft_payload?: JsonMap | null;

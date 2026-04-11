@@ -19,6 +19,13 @@ export interface ApplicationRow {
   location?: string | null;
   source_url?: string | null;
   source_job_id?: string | null;
+  description_text?: string | null;
+  description_html?: string | null;
+  description_fetched_at?: string | Date | null;
+  description_source_url?: string | null;
+  keyword_extraction_status?: string | null;
+  keyword_extracted_at?: string | Date | null;
+  keyword_extraction?: Record<string, any> | null;
   external_apply_url?: string | null;
   cv_variant_path?: string | null;
   cv_variant_file_name?: string | null;

@@ -8,6 +8,7 @@ It turns the existing search + CV tooling into a tracked workflow:
 
 - ingest LinkedIn search results
 - dedupe jobs into a database
+- persist expanded job descriptions and extracted CV-tailoring keywords
 - generate CV variants for shortlisted roles
 - discover application flows
 - queue approvals in a local dashboard
@@ -48,6 +49,7 @@ Notes:
 - `TARS_LIFECYCLE_DATABASE_URL` must be configured
 - LinkedIn browser profile must already be bootstrapped
 - CV generation should already be working
+- `TARS_KEYWORD_EXTRACTOR_MODE=hybrid` is the default; model/command extractor settings are optional because deterministic extraction is the fallback
 - applicant policy defaults live in `lifecycle/policies/applicant_policy.json`
 - applicant facts and reusable job-form answers live in `lifecycle/policies/applicant_facts.json`
 

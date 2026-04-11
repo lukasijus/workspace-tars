@@ -122,6 +122,12 @@ TARS_CANDIDATE_FILENAME_PREFIX="CANDIDATE_NAME"
 TARS_CV_REPO_DIR="../cv"
 TARS_CV_MAIN_TEX="cv.tex"
 
+# Job keyword extraction for CV tailoring
+TARS_KEYWORD_EXTRACTOR_MODE="hybrid"
+TARS_KEYWORD_EXTRACTOR_MODEL=""
+TARS_KEYWORD_EXTRACTOR_COMMAND=""
+TARS_KEYWORD_EXTRACTOR_OPENAI_API_KEY=""
+
 # Browser settings
 TARS_CHROME_PATH="google-chrome"
 
@@ -148,6 +154,7 @@ Notes:
 - `TARS_CANDIDATE_DISPLAY_NAME` is used in generated manifests and metadata.
 - `TARS_CANDIDATE_FILENAME_PREFIX` is used in generated PDF filenames.
 - `TARS_CV_REPO_DIR` should point to the separate LaTeX CV repository.
+- `TARS_KEYWORD_EXTRACTOR_MODE=hybrid` uses deterministic keyword extraction by default and can merge an optional model/command extractor when configured.
 - `TARS_LIFECYCLE_DATABASE_URL` is required for the new dashboard/history/application lifecycle.
 - daily summary emails are optional; if SMTP settings are missing, the summary job still writes a local report file and stores the record in the database.
 - `.env` is intentionally ignored by git.
