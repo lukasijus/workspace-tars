@@ -77,6 +77,7 @@ export interface ApplicationDetail {
   steps: ApplicationStepRow[];
   latestImageArtifact: ArtifactRow | null;
   latestHtmlArtifact: ArtifactRow | null;
+  latestCvArtifact: ArtifactRow | null;
   availableActions: Record<string, boolean>;
 }
 

@@ -29,6 +29,7 @@ const { runSubmitApproved } = submitApprovedModule;
 
 const IMAGE_ARTIFACT_KINDS = new Set(["submission_screenshot", "discovery_screenshot"]);
 const HTML_ARTIFACT_KINDS = new Set(["submission_html", "discovery_html"]);
+const CV_ARTIFACT_KINDS = new Set(["cv_variant_pdf"]);
 
 export function summarizeRowReason(row: ApplicationRow): string {
   if (row.is_active === false && row.inactive_reason) {
@@ -278,6 +279,7 @@ export async function fetchApplication(applicationId: ApplicationId): Promise<Ap
     artifacts: detail.artifacts,
     latestImageArtifact: findLatestArtifact(detail.artifacts, IMAGE_ARTIFACT_KINDS),
     latestHtmlArtifact: findLatestArtifact(detail.artifacts, HTML_ARTIFACT_KINDS),
+    latestCvArtifact: findLatestArtifact(detail.artifacts, CV_ARTIFACT_KINDS),
     availableActions: availableActions(detail.application),
   };
 }

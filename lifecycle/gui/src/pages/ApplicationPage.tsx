@@ -16,6 +16,7 @@ import {
 } from "@mui/material";
 import { ActionButton } from "../components/ActionButton";
 import { ArtifactPreview } from "../components/ArtifactPreview";
+import { CvPreviewCard } from "../components/CvPreviewCard";
 import { JsonPanel } from "../components/JsonPanel";
 import { StatusChip } from "../components/StatusChip";
 import {
@@ -222,21 +223,31 @@ export function ApplicationPage() {
       </Card>
 
       <Grid container spacing={3}>
-        <Grid size={{ xs: 12, md: 5 }}>
-          <Card elevation={0} sx={{ border: "1px solid", borderColor: "divider", height: "100%" }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Latest snapshot
-              </Typography>
-              <ArtifactPreview
-                large
-                imageArtifactId={detail.latestImageArtifact?.id}
-                htmlArtifactId={detail.latestHtmlArtifact?.id}
-              />
-            </CardContent>
-          </Card>
-        </Grid>
         <Grid size={{ xs: 12, md: 7 }}>
+          <Grid container spacing={3}>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <Card elevation={0} sx={{ border: "1px solid", borderColor: "divider", height: "100%" }}>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Latest snapshot
+                  </Typography>
+                  <ArtifactPreview
+                    large
+                    imageArtifactId={detail.latestImageArtifact?.id}
+                    htmlArtifactId={detail.latestHtmlArtifact?.id}
+                  />
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <CvPreviewCard
+                artifactId={detail.latestCvArtifact?.id}
+                fileName={app.cv_variant_file_name}
+              />
+            </Grid>
+          </Grid>
+        </Grid>
+        <Grid size={{ xs: 12, md: 5 }}>
           <JsonPanel title="Latest external step" value={summary || "No external step captured"} />
         </Grid>
       </Grid>
