@@ -1,0 +1,973 @@
+const fs = require("fs");
+const path = require("path");
+const {
+  detectLinkedInLoginState,
+  getPrimaryPage,
+  gotoAndSettle,
+  launchPersistentContext,
+} = require("../../linkedin_search/lib/browser");
+const { config } = require("./config");
+const {
+  ensureDir,
+  slugify,
+  stampForFile,
+  isBrowserClosedError,
+} = require("./utils");
+const { FLOW_TYPE } = require("./state");
+const { inspectExternalFlow } = require("./external-apply");
+const {
+  resolveFieldAnswerAsync,
+  annotateResolvedFieldAsync,
+} = require("./question-engine");
+
+function classifyExternalUrl(targetUrl) {
+  if (!targetUrl) return FLOW_TYPE.UNKNOWN;
+  try {
+    const hostname = new URL(targetUrl).hostname.toLowerCase();
+    if (hostname.includes("greenhouse.io"))
+      return FLOW_TYPE.EXTERNAL_ATS_GREENHOUSE;
+    if (hostname.includes("lever.co")) return FLOW_TYPE.EXTERNAL_ATS_LEVER;
+    return FLOW_TYPE.EXTERNAL_CUSTOM;
+  } catch {
+    return FLOW_TYPE.UNKNOWN;
+  }
+}
+
+async function inspectPrimaryApply(page) {
+  return page.evaluate(() => {
+    const normalize = (value) => value?.replace(/\s+/g, " ").trim() || null;
+    const candidates = Array.from(document.querySelectorAll("button, a"))
+      .map((node) => ({
+        tagName: node.tagName.toLowerCase(),
+        text: normalize(node.textContent || ""),
+        href: node.getAttribute("href"),
+        ariaLabel: node.getAttribute("aria-label"),
+        className: node.className,
+        visible: Boolean(
+          node.offsetWidth || node.offsetHeight || node.getClientRects().length,
+        ),
+      }))
+      .filter((item) =>
+        /(easy apply|apply now|apply|continue applying)/i.test(
+          `${item.text || ""} ${item.ariaLabel || ""}`,
+        ),
+      );
+
+    return candidates.find((item) => item.visible) || candidates[0] || null;
+  });
+}
+
+function decodeSerializedUrl(value) {
+  if (!value) return null;
+  return value
+    .replace(/\\u002F/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/g, "&")
+    .replace(/\\"/g, '"');
+}
+
+async function extractCompanyApplyUrl(page) {
+  const html = await page.content();
+  const match = html.match(/"companyApplyUrl":"([^"]+)"/);
+  return match ? decodeSerializedUrl(match[1]) : null;
+}
+
+async function inspectJobAvailability(page) {
+  return page.evaluate(() => {
+    const text = String(document.body?.innerText || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const reasonMap = [
+      {
+        pattern: /no longer accepting applications/i,
+        reason: "No longer accepting applications",
+      },
+      {
+        pattern: /applications closed/i,
+        reason: "Applications closed",
+      },
+      {
+        pattern: /this job is closed/i,
+        reason: "This job is closed",
+      },
+      {
+        pattern: /job posting is no longer available/i,
+        reason: "Job posting is no longer available",
+      },
+      {
+        pattern: /position has been filled/i,
+        reason: "Position has been filled",
+      },
+    ];
+
+    const matched = reasonMap.find(({ pattern }) => pattern.test(text));
+    if (!matched) {
+      return { isActive: true, reason: null };
+    }
+
+    return {
+      isActive: false,
+      reason: matched.reason,
+    };
+  });
+}
+
+async function inspectLinkedInAppliedState(page) {
+  const html = await page.content().catch(() => "");
+  const bodyText = await page
+    .evaluate(() => String(document.body?.innerText || ""))
+    .catch(() => "");
+
+  const applied =
+    /"applied":true/i.test(html) ||
+    /"formattedApplyDate":"Submitted on/i.test(html) ||
+    /\bsubmitted on\b/i.test(bodyText) ||
+    /\byour application was sent\b/i.test(bodyText);
+
+  const formattedMatch = html.match(/"formattedApplyDate":"([^"]+)"/i);
+
+  return {
+    applied,
+    reason: formattedMatch?.[1] || (applied ? "Already applied on LinkedIn" : null),
+  };
+}
+
+async function findVisibleApplyButton(page, pattern) {
+  const buttons = page.locator(
+    "button#jobs-apply-button-id, button[data-live-test-job-apply-button]",
+  );
+  const count = await buttons.count();
+
+  for (let index = 0; index < count; index += 1) {
+    const candidate = buttons.nth(index);
+    const visible = await candidate.isVisible().catch(() => false);
+    if (!visible) continue;
+    const text = await candidate.textContent().catch(() => "");
+    const ariaLabel = await candidate
+      .getAttribute("aria-label")
+      .catch(() => "");
+    const label = `${text || ""} ${ariaLabel || ""}`.trim();
+    if (pattern.test(label)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function extractEasyApplyState(page) {
+  const modal = page
+    .locator('.jobs-easy-apply-modal, div[role="dialog"]')
+    .first();
+  await modal.waitFor({ state: "visible", timeout: 15000 });
+
+  return page.evaluate(() => {
+    const dialog = document.querySelector(
+      '.jobs-easy-apply-modal, div[role="dialog"]',
+    );
+    if (!dialog) return null;
+
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+    const choiceGroups = Array.from(dialog.querySelectorAll("fieldset")).flatMap(
+      (fieldset) => {
+        const inputs = Array.from(
+          fieldset.querySelectorAll('input[type="radio"], input[type="checkbox"]'),
+        );
+        if (!inputs.length) return [];
+
+        const type = inputs[0].getAttribute("type") || "radio";
+        const legend = normalize(fieldset.querySelector("legend")?.textContent);
+        const label = legend || normalize(fieldset.textContent) || "field";
+        const required =
+          inputs.some(
+            (input) =>
+              input.required || input.getAttribute("aria-required") === "true",
+          ) || /required|\*/i.test(label);
+        const valuePresent =
+          type === "checkbox"
+            ? inputs.some((input) => input.checked)
+            : inputs.some((input) => input.checked);
+        const options = inputs.map((input) => {
+          const optionLabel = normalize(
+            fieldset.querySelector(`label[for="${input.id}"]`)?.textContent ||
+              input.closest("label")?.textContent ||
+              input.getAttribute("value") ||
+              input.value,
+          );
+          return {
+            label: optionLabel,
+            checked: Boolean(input.checked),
+          };
+        });
+
+        return [
+          {
+            name: inputs[0].getAttribute("name") || inputs[0].id || null,
+            label,
+            type,
+            required,
+            valuePresent,
+            options,
+          },
+        ];
+      },
+    );
+
+    const textFields = Array.from(
+      dialog.querySelectorAll("input, textarea, select"),
+    )
+      .filter((field) => {
+        const type = field.getAttribute("type");
+        return (
+          type !== "hidden" &&
+          type !== "submit" &&
+          type !== "button" &&
+          type !== "radio" &&
+          type !== "checkbox"
+        );
+      })
+      .map((field) => {
+        const label =
+          field.closest("label")?.textContent ||
+          dialog.querySelector(`label[for="${field.id}"]`)?.textContent ||
+          field.getAttribute("aria-label") ||
+          field.getAttribute("placeholder") ||
+          field.getAttribute("name") ||
+          field.id ||
+          "field";
+        const required =
+          field.required ||
+          field.getAttribute("aria-required") === "true" ||
+          /\*/.test(label);
+        const value = "value" in field ? String(field.value || "").trim() : "";
+        const selectedOption =
+          field.tagName.toLowerCase() === "select"
+            ? field.options?.[field.selectedIndex] || null
+            : null;
+        const selectedLabel =
+          selectedOption
+            ? normalize(selectedOption.textContent || selectedOption.value || "")
+            : "";
+        const isPlaceholderSelect =
+          field.tagName.toLowerCase() === "select" &&
+          (/^select\b/i.test(selectedLabel) ||
+            /^choose\b/i.test(selectedLabel) ||
+            /^please select\b/i.test(selectedLabel) ||
+            /^select an option$/i.test(value));
+        return {
+          name: field.getAttribute("name") || field.id || null,
+          label: normalize(label),
+          type:
+            field.tagName.toLowerCase() === "select"
+              ? "select"
+              : field.getAttribute("type") || field.tagName.toLowerCase(),
+          required,
+          valuePresent: value.length > 0 && !isPlaceholderSelect,
+          options:
+            field.tagName.toLowerCase() === "select"
+              ? Array.from(field.options || []).map((option) => ({
+                  value: String(option.value || "").trim(),
+                  label: normalize(option.textContent || option.value || ""),
+                }))
+              : undefined,
+        };
+      });
+
+    const fields = [...choiceGroups, ...textFields];
+
+    const buttons = Array.from(dialog.querySelectorAll("button"))
+      .map((button) => normalize(button.textContent))
+      .filter(Boolean);
+
+    const emptyRequiredFields = fields.filter(
+      (field) => field.required && !field.valuePresent,
+    );
+    return {
+      fields,
+      buttons,
+      emptyRequiredFields,
+    };
+  });
+}
+
+function fieldSearchText(field) {
+  return `${field?.label || ""} ${field?.name || ""}`
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizePhoneValue(field, value) {
+  const key = fieldSearchText(field);
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+
+  if (/nationalnumber/.test(key) && normalized.startsWith("0")) {
+    return normalized.replace(/^0+/, "");
+  }
+
+  return normalized;
+}
+
+async function getApplicantAutofillValue(field) {
+  const resolution = await resolveFieldAnswerAsync(field);
+  if (!resolution.answer) return "";
+  if (/mobile phone number|phone number|nationalnumber|phone/.test(fieldSearchText(field))) {
+    return normalizePhoneValue(field, resolution.answer);
+  }
+  return resolution.answer;
+}
+
+async function annotateEasyApplyFields(fields = [], options = {}) {
+  return Promise.all(fields.map((field) => annotateResolvedFieldAsync(field, options)));
+}
+
+async function getUnfillableRequiredFields(fields = [], options = {}) {
+  const annotatedFields = await annotateEasyApplyFields(fields, options);
+  return annotatedFields.filter(
+    (field) => field.required && !field.valuePresent && !field.autoAnswerable,
+  );
+}
+
+function escapeForAttributeSelector(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function buildFieldSelectors(field) {
+  const selectors = [];
+  const key = String(field?.name || "").trim();
+  if (key) {
+    const escaped = escapeForAttributeSelector(key);
+    selectors.push(`[name="${escaped}"]`);
+    selectors.push(`#${escaped}`);
+  }
+  return selectors.join(", ");
+}
+
+async function setEasyApplyFieldValue(page, field, value) {
+  if (!field?.name || !value) return false;
+
+  if (field.type === "radio" || field.type === "checkbox") {
+    return page
+      .evaluate(({ name, label, type, desired }) => {
+        const dialog = document.querySelector(
+          '.jobs-easy-apply-modal, div[role="dialog"]',
+        );
+        if (!dialog) return false;
+
+        const normalize = (value) =>
+          String(value || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+
+        const desiredNormalized = normalize(desired);
+        const truthy = /^(1|true|yes|on|agree|accepted)$/i.test(
+          String(desired || "").trim(),
+        );
+
+        const fieldsets = Array.from(dialog.querySelectorAll("fieldset"));
+        let group = null;
+
+        if (name) {
+          group = fieldsets.find((fieldset) =>
+            Array.from(fieldset.querySelectorAll("input")).some(
+              (input) => (input.getAttribute("name") || input.id || null) === name,
+            ),
+          );
+        }
+
+        if (!group && label) {
+          const wanted = normalize(label);
+          group = fieldsets.find((fieldset) =>
+            normalize(fieldset.querySelector("legend")?.textContent).includes(wanted),
+          );
+        }
+
+        if (!group) return false;
+
+        const inputs = Array.from(
+          group.querySelectorAll(
+            type === "radio" ? 'input[type="radio"]' : 'input[type="checkbox"]',
+          ),
+        );
+        if (!inputs.length) return false;
+
+        const options = inputs.map((input) => {
+          const optionLabel = normalize(
+            group.querySelector(`label[for="${input.id}"]`)?.textContent ||
+              input.closest("label")?.textContent ||
+              input.value,
+          );
+          return { input, optionLabel };
+        });
+
+        let match = null;
+        if (type === "radio") {
+          match =
+            options.find(({ optionLabel }) => optionLabel === desiredNormalized) ||
+            options.find(({ optionLabel }) => optionLabel.includes(desiredNormalized)) ||
+            options.find(({ optionLabel }) => desiredNormalized.includes(optionLabel));
+        } else if (truthy) {
+          match = options[0];
+        }
+
+        if (!match) return false;
+
+        const labelNode =
+          group.querySelector(`label[for="${match.input.id}"]`) ||
+          match.input.closest("label");
+        if (labelNode) {
+          labelNode.click();
+        } else {
+          match.input.checked = true;
+          match.input.dispatchEvent(new Event("input", { bubbles: true }));
+          match.input.dispatchEvent(new Event("change", { bubbles: true }));
+          match.input.click();
+        }
+
+        return Boolean(match.input.checked);
+      }, {
+        name: field.name,
+        label: field.label,
+        type: field.type,
+        desired: value,
+      })
+      .catch(() => false);
+  }
+
+  let locator = page
+    .locator(
+      buildFieldSelectors(field)
+        .split(", ")
+        .map(
+          (selector) =>
+            `.jobs-easy-apply-modal ${selector}, div[role="dialog"] ${selector}`,
+        )
+        .join(", "),
+    )
+    .first();
+
+  if (!(await locator.count())) {
+    const labelText = String(field.label || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (labelText) {
+      locator = page
+        .locator('.jobs-easy-apply-modal label, div[role="dialog"] label')
+        .filter({ hasText: labelText })
+        .locator(
+          "xpath=following::input[1] | xpath=following::textarea[1] | xpath=following::select[1]",
+        )
+        .first();
+    }
+  }
+  if (!(await locator.count())) return false;
+
+  if (field.type === "select") {
+    return locator
+      .evaluate((element, desired) => {
+        if (!element || element.tagName.toLowerCase() !== "select")
+          return false;
+        const options = Array.from(element.options || []);
+        const normalizedDesired = String(desired).trim().toLowerCase();
+        const match = options.find((option) => {
+          const label = String(option.textContent || "")
+            .trim()
+            .toLowerCase();
+          const valueText = String(option.value || "")
+            .trim()
+            .toLowerCase();
+          const isYes =
+            normalizedDesired === "yes" &&
+            /(^yes\b|\bagree\b|\baccept\b|\beligible\b|\bauthorized\b)/i.test(
+              label,
+            );
+          const isNo =
+            normalizedDesired === "no" &&
+            /(^no\b|\bdecline\b|\bnot authorized\b|\brequire sponsorship\b)/i.test(
+              label,
+            );
+          return (
+            label === normalizedDesired ||
+            valueText === normalizedDesired ||
+            label.includes(normalizedDesired) ||
+            valueText.includes(normalizedDesired) ||
+            isYes ||
+            isNo
+          );
+        });
+        if (!match) return false;
+        element.value = match.value;
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }, value)
+      .catch(() => false);
+  }
+
+  await locator.fill(String(value)).catch(() => {});
+  if (/location|city/.test(fieldSearchText(field))) {
+    await page.waitForTimeout(500);
+    await locator.press("ArrowDown").catch(() => {});
+    await locator.press("Enter").catch(() => {});
+  }
+  await locator.blur().catch(() => {});
+  return true;
+}
+
+async function autofillEasyApplyFields(page, fields = [], options = {}) {
+  const filled = [];
+  const skipped = [];
+  const answerDecisions = [];
+
+  for (const field of fields) {
+    const resolvedField = await annotateResolvedFieldAsync(field, options);
+    if (resolvedField.answerDecision) {
+      answerDecisions.push(resolvedField.answerDecision);
+    }
+    const value = resolvedField.resolvedAnswer;
+    if (!resolvedField.autoAnswerable || !value) {
+      skipped.push({
+        name: field.name || null,
+        label: field.label || null,
+        questionIntent: resolvedField.questionIntent || null,
+      });
+      continue;
+    }
+
+    const ok = await setEasyApplyFieldValue(page, field, value);
+    if (ok) {
+      filled.push({
+        name: field.name || null,
+        label: field.label || null,
+        questionIntent: resolvedField.questionIntent || null,
+      });
+    } else {
+      skipped.push({
+        name: field.name || null,
+        label: field.label || null,
+        questionIntent: resolvedField.questionIntent || null,
+      });
+    }
+  }
+
+  return { filled, skipped, answerDecisions };
+}
+
+async function closeEasyApplyModal(page) {
+  const closeButton = page
+    .locator(
+      '.jobs-easy-apply-modal button[aria-label*="Dismiss"], .jobs-easy-apply-modal button[aria-label*="Close"], div[role="dialog"] button[aria-label*="Dismiss"], div[role="dialog"] button[aria-label*="Close"]',
+    )
+    .first();
+  if (await closeButton.count()) {
+    await closeButton.click().catch(() => {});
+    return;
+  }
+  await page.keyboard.press("Escape").catch(() => {});
+}
+
+async function savePageArtifacts(page, slug) {
+  ensureDir(config.discoveryRoot);
+  const stamp = stampForFile();
+  const base = path.join(config.discoveryRoot, `${stamp}-${slugify(slug)}`);
+  const screenshotPath = `${base}.png`;
+  const htmlPath = `${base}.html`;
+  await page
+    .screenshot({ path: screenshotPath, fullPage: true })
+    .catch(() => {});
+  const html = await page.content().catch(() => null);
+  if (html) {
+    fs.writeFileSync(htmlPath, html, "utf8");
+  }
+  return { screenshotPath, htmlPath };
+}
+
+async function discoverApplicationFlow(job, options = {}) {
+  let context;
+  let artifacts = null;
+  try {
+    context = await launchPersistentContext({
+      headed: Boolean(options.headed),
+    });
+    const page = await getPrimaryPage(context);
+    await gotoAndSettle(page, job.link);
+
+    const loginState = await detectLinkedInLoginState(page);
+    if (loginState !== "authenticated") {
+      artifacts = await savePageArtifacts(
+        page,
+        `login-${job.jobId || job.title}`,
+      );
+      return {
+        ok: false,
+        loginState,
+        readiness: "blocked",
+        flowType: FLOW_TYPE.UNKNOWN,
+        reason: `LinkedIn session is not ready (${loginState})`,
+        fields: [],
+        artifacts,
+      };
+    }
+
+    const availability = await inspectJobAvailability(page);
+    if (availability.isActive === false) {
+      artifacts = await savePageArtifacts(page, job.jobId || job.title);
+      return {
+        ok: true,
+        loginState,
+        readiness: "blocked",
+        flowType: FLOW_TYPE.NO_APPLY_PATH,
+        reason: availability.reason,
+        fields: [],
+        artifacts,
+        jobActive: false,
+        inactiveReason: availability.reason,
+      };
+    }
+
+    const primaryApply = await inspectPrimaryApply(page);
+    artifacts = await savePageArtifacts(page, job.jobId || job.title);
+
+    if (!primaryApply) {
+      return {
+        ok: true,
+        loginState,
+        readiness: "blocked",
+        flowType: FLOW_TYPE.NO_APPLY_PATH,
+        reason: "No apply button found on the job page",
+        fields: [],
+        artifacts,
+        jobActive: true,
+      };
+    }
+
+    const label =
+      `${primaryApply.text || ""} ${primaryApply.ariaLabel || ""}`.trim();
+    if (/easy apply|continue applying/i.test(label)) {
+      const easyButton = await findVisibleApplyButton(
+        page,
+        /easy apply|continue applying/i,
+      );
+      if (!easyButton) {
+        return {
+          ok: true,
+          loginState,
+          readiness: "blocked",
+          flowType: FLOW_TYPE.EASY_APPLY_NATIVE,
+          reason: "Easy Apply button was detected but could not be activated",
+          fields: [],
+          artifacts,
+        };
+      }
+
+      await easyButton.click();
+      const state = await extractEasyApplyState(page);
+      const annotatedFields = await annotateEasyApplyFields(state?.fields || [], {
+        application: options.application || null,
+      });
+      const unfillableRequiredFields = await getUnfillableRequiredFields(
+        annotatedFields,
+        { application: options.application || null },
+      );
+      await closeEasyApplyModal(page);
+      return {
+        ok: true,
+        loginState,
+        readiness: unfillableRequiredFields.length
+          ? "needs_human_input"
+          : "ready_for_approval",
+        flowType: FLOW_TYPE.EASY_APPLY_NATIVE,
+        reason: unfillableRequiredFields.length
+          ? `Easy Apply still needs manual answers: ${unfillableRequiredFields.map((field) => field.label).join(", ")}`
+          : "Easy Apply required fields can be autofilled from the applicant profile",
+        fields: annotatedFields,
+        buttons: state?.buttons || [],
+        artifacts,
+        jobActive: true,
+      };
+    }
+
+    const externalUrl = primaryApply.href
+      ? new URL(primaryApply.href, job.link).toString()
+      : await extractCompanyApplyUrl(page);
+    const externalType = classifyExternalUrl(externalUrl);
+    if (externalType !== FLOW_TYPE.EXTERNAL_CUSTOM || !externalUrl) {
+      return {
+        ok: true,
+        loginState,
+        readiness: "needs_human_input",
+        flowType: externalType,
+        reason:
+          "External application flow discovered; manual review still required in v1",
+        externalUrl,
+        fields: [],
+        artifacts,
+        jobActive: true,
+      };
+    }
+
+    // External discovery launches its own persistent browser context. Close the
+    // LinkedIn context first or Chrome's ProcessSingleton will reject the second
+    // launch against the same profile directory.
+    if (context) {
+      await context.close().catch(() => {});
+      context = null;
+    }
+
+    const externalDiscovery = await inspectExternalFlow(externalUrl, {
+      headed: Boolean(options.headed),
+      application: options.application || null,
+    });
+    return {
+      ...externalDiscovery,
+      loginState,
+      flowType: FLOW_TYPE.EXTERNAL_CUSTOM,
+      externalUrl,
+      artifacts: externalDiscovery.artifacts || artifacts,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      loginState: "unknown",
+      readiness: isBrowserClosedError(error) ? "recoverable_error" : "failed",
+      flowType: FLOW_TYPE.UNKNOWN,
+      reason: error.message,
+      fields: [],
+      artifacts,
+      jobActive: true,
+    };
+  } finally {
+    if (context) {
+      await context.close().catch(() => {});
+    }
+  }
+}
+
+async function submitEasyApply(job, application, options = {}) {
+  let context;
+  let artifacts = null;
+  const answerDecisions = [];
+  try {
+    context = await launchPersistentContext({
+      headed: Boolean(options.headed),
+    });
+    const page = await getPrimaryPage(context);
+    await gotoAndSettle(
+      page,
+      job.source_url || job.link || application.external_apply_url,
+    );
+
+    const loginState = await detectLinkedInLoginState(page);
+    if (loginState !== "authenticated") {
+      artifacts = await savePageArtifacts(
+        page,
+        `submit-login-${job.jobId || job.title}`,
+      );
+      return {
+        ok: false,
+        status: "failed",
+        errorClass: "auth",
+        reason: `LinkedIn session is not ready (${loginState})`,
+        artifacts,
+        jobActive: true,
+      };
+    }
+
+    const availability = await inspectJobAvailability(page);
+    if (availability.isActive === false) {
+      artifacts = await savePageArtifacts(
+        page,
+        `submit-inactive-${job.jobId || job.title}`,
+      );
+      return {
+        ok: false,
+        status: "skipped",
+        errorClass: "inactive",
+        reason: availability.reason,
+        artifacts,
+        jobActive: false,
+        inactiveReason: availability.reason,
+      };
+    }
+
+    const appliedState = await inspectLinkedInAppliedState(page);
+    if (appliedState.applied) {
+      artifacts = await savePageArtifacts(
+        page,
+        `submit-already-applied-${job.jobId || job.title}`,
+      );
+      return {
+        ok: true,
+        status: "submitted",
+        reason: appliedState.reason,
+        artifacts,
+        jobActive: true,
+      };
+    }
+
+    const easyButton = await findVisibleApplyButton(
+      page,
+      /easy apply|continue applying/i,
+    );
+    if (!easyButton) {
+      const appliedStateWhenMissing = await inspectLinkedInAppliedState(page);
+      if (appliedStateWhenMissing.applied) {
+        artifacts = await savePageArtifacts(
+          page,
+          `submit-already-applied-${job.jobId || job.title}`,
+        );
+        return {
+          ok: true,
+          status: "submitted",
+          reason: appliedStateWhenMissing.reason,
+          artifacts,
+          jobActive: true,
+        };
+      }
+      const refreshedAvailability = await inspectJobAvailability(page);
+      artifacts = await savePageArtifacts(
+        page,
+        `submit-missing-${job.jobId || job.title}`,
+      );
+      return {
+        ok: false,
+        status: refreshedAvailability.isActive === false ? "skipped" : "failed",
+        errorClass: refreshedAvailability.isActive === false ? "inactive" : "flow",
+        reason:
+          refreshedAvailability.isActive === false
+            ? refreshedAvailability.reason
+            : "Easy Apply button not available at submission time",
+        artifacts,
+        jobActive: refreshedAvailability.isActive !== false,
+        inactiveReason: refreshedAvailability.reason || null,
+      };
+    }
+
+    await easyButton.click();
+    for (let index = 0; index < 6; index += 1) {
+      let state = await extractEasyApplyState(page);
+      const fileInput = page
+        .locator(
+          '.jobs-easy-apply-modal input[type="file"], div[role="dialog"] input[type="file"]',
+        )
+        .first();
+      if (application.cv_variant_path && (await fileInput.count())) {
+        await fileInput
+          .setInputFiles(application.cv_variant_path)
+          .catch(() => {});
+      }
+
+      if (state?.emptyRequiredFields?.length) {
+        const fillResult = await autofillEasyApplyFields(
+          page,
+          state.emptyRequiredFields || [],
+          { application },
+        );
+        answerDecisions.push(...(fillResult.answerDecisions || []));
+        await page.waitForTimeout(800);
+        state = await extractEasyApplyState(page);
+      }
+
+      if (state?.emptyRequiredFields?.length) {
+        const annotatedFields = await annotateEasyApplyFields(
+          state.emptyRequiredFields || [],
+          { application },
+        );
+        artifacts = await savePageArtifacts(
+          page,
+          `submit-needs-human-${job.jobId || job.title}`,
+        );
+        await closeEasyApplyModal(page);
+        return {
+          ok: false,
+          status: "needs_human_input",
+          errorClass: "form",
+          reason: "Application requires additional answers before submission",
+          fields: annotatedFields,
+          answerDecisions,
+          artifacts,
+          jobActive: true,
+        };
+      }
+
+      const submitButton = page
+        .locator('button:has-text("Submit application")')
+        .first();
+      if (await submitButton.count()) {
+        await submitButton.click();
+        await page.waitForTimeout(2500);
+        artifacts = await savePageArtifacts(
+          page,
+          `submit-success-${job.jobId || job.title}`,
+        );
+        return {
+          ok: true,
+          status: "submitted",
+          reason: "LinkedIn Easy Apply submitted",
+          answerDecisions,
+          artifacts,
+          jobActive: true,
+        };
+      }
+
+      const nextButton = page
+        .locator('button:has-text("Next"), button:has-text("Review")')
+        .first();
+      if (await nextButton.count()) {
+        await nextButton.click();
+        await page.waitForTimeout(1500);
+        continue;
+      }
+
+      artifacts = await savePageArtifacts(
+        page,
+        `submit-unknown-${job.jobId || job.title}`,
+      );
+      await closeEasyApplyModal(page);
+      return {
+        ok: false,
+        status: "failed",
+        errorClass: "flow",
+        reason: "Could not find a supported next/review/submit button",
+        artifacts,
+        jobActive: true,
+      };
+    }
+
+    artifacts = await savePageArtifacts(
+      page,
+      `submit-timeout-${job.jobId || job.title}`,
+    );
+    await closeEasyApplyModal(page);
+    return {
+      ok: false,
+      status: "failed",
+      errorClass: "timeout",
+      reason: "Exceeded maximum Easy Apply steps before submission",
+      artifacts,
+      jobActive: true,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: "failed",
+      errorClass: isBrowserClosedError(error) ? "browser_closed" : "exception",
+      reason: error.message,
+      artifacts,
+      jobActive: true,
+    };
+  } finally {
+    if (context) {
+      await context.close().catch(() => {});
+    }
+  }
+}
+
+module.exports = {
+  discoverApplicationFlow,
+  submitEasyApply,
+};
