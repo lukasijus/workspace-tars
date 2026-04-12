@@ -31,6 +31,8 @@ export const state = fromLifecycle("lib/state.js");
 export const repository = fromLifecycle("lib/repository.js");
 export const applicationDiscovery = fromLifecycle("lib/application-discovery.js");
 export const submitApprovedModule = fromLifecycle("submit_approved.js");
+export const applicantFactsModule = fromLifecycle("lib/applicant-facts.js");
+export const applicantPolicyModule = fromLifecycle("lib/applicant-policy.js");
 
 export const config = configModule.config;
 export const {

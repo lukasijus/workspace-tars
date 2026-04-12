@@ -15,6 +15,11 @@ export const navigationItems: NavigationItem[] = [
     path: "/scheduler",
     match: "exact",
   },
+  {
+    label: "Settings",
+    path: "/settings",
+    match: "exact",
+  },
 ];
 
 export function isNavigationItemActive(pathname: string, item: NavigationItem) {

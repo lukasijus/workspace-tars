@@ -4,6 +4,7 @@ import type {
   Id,
   SchedulerStartRequest,
   SchedulerStatus,
+  SettingsPayload,
 } from "../types";
 
 export class ApiError extends Error {
@@ -46,6 +47,16 @@ function post<T>(url: string, body: unknown = {}) {
 
 export function fetchDashboard() {
   return requestJson<DashboardData>("/api/dashboard");
+}
+
+export async function fetchSettings() {
+  const response = await requestJson<{ ok: true; settings: SettingsPayload }>("/api/settings");
+  return response.settings;
+}
+
+export async function saveSettings(settings: SettingsPayload) {
+  const response = await post<{ ok: true; settings: SettingsPayload }>("/api/settings", settings);
+  return response.settings;
 }
 
 export async function fetchSchedulerStatus() {

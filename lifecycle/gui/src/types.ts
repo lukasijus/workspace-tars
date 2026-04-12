@@ -207,3 +207,9 @@ export interface SchedulerStartRequest {
   itemsPerRun: number;
   gapMinutes: number;
 }
+
+export interface SettingsPayload {
+  applicantFacts: string;
+  applicantPolicy: string;
+  applicantProfile: string;
+}
