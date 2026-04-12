@@ -2,7 +2,7 @@ import express, { NextFunction, Request, Response } from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { HttpError } from "./httpError";
-import { config, db, guiDistRoot } from "./legacy";
+import { applicantFactsModule, applicantPolicyModule, config, db, guiDistRoot } from "./legacy";
 import {
   approveApplication,
   assertArtifactReadable,
@@ -79,6 +79,75 @@ async function createApp() {
 
   app.get("/api/dashboard", asyncRoute(async (_request, response) => {
     response.json(await fetchDashboard());
+  }));
+
+  app.get("/api/settings", asyncRoute(async (_request, response) => {
+    const applicantFacts = fs.existsSync(config.applicantFactsPath)
+      ? fs.readFileSync(config.applicantFactsPath, "utf8")
+      : "";
+    const applicantPolicy = fs.existsSync(config.applicantPolicyPath)
+      ? fs.readFileSync(config.applicantPolicyPath, "utf8")
+      : "";
+    const applicantProfile = fs.existsSync(config.applicantProfilePath)
+      ? fs.readFileSync(config.applicantProfilePath, "utf8")
+      : "";
+
+    response.json({
+      ok: true,
+      settings: {
+        applicantFacts,
+        applicantPolicy,
+        applicantProfile,
+      },
+    });
+  }));
+
+  app.post("/api/settings", asyncRoute(async (request, response) => {
+    const { applicantFacts, applicantPolicy, applicantProfile } = request.body;
+
+    if (typeof applicantFacts === "string") {
+      try {
+        JSON.parse(applicantFacts);
+      } catch (err: any) {
+        throw new HttpError(400, `Invalid JSON in Applicant Facts: ${err.message}`);
+      }
+      fs.writeFileSync(config.applicantFactsPath, applicantFacts, "utf8");
+      config.applicantFacts = applicantFactsModule.loadApplicantFacts(
+        config.applicantFactsPath,
+      );
+    }
+
+    if (typeof applicantPolicy === "string") {
+      try {
+        JSON.parse(applicantPolicy);
+      } catch (err: any) {
+        throw new HttpError(400, `Invalid JSON in Applicant Policy: ${err.message}`);
+      }
+      fs.writeFileSync(config.applicantPolicyPath, applicantPolicy, "utf8");
+      config.applicantPolicy = applicantPolicyModule.loadApplicantPolicy(
+        config.applicantPolicyPath,
+      );
+    }
+
+    if (typeof applicantProfile === "string") {
+      fs.writeFileSync(config.applicantProfilePath, applicantProfile, "utf8");
+      config.applicantProfileText = applicantProfile;
+    }
+
+    response.json({
+      ok: true,
+      settings: {
+        applicantFacts: fs.existsSync(config.applicantFactsPath)
+          ? fs.readFileSync(config.applicantFactsPath, "utf8")
+          : "",
+        applicantPolicy: fs.existsSync(config.applicantPolicyPath)
+          ? fs.readFileSync(config.applicantPolicyPath, "utf8")
+          : "",
+        applicantProfile: fs.existsSync(config.applicantProfilePath)
+          ? fs.readFileSync(config.applicantProfilePath, "utf8")
+          : "",
+      },
+    });
   }));
 
   app.get("/api/scheduler", asyncRoute(async (_request, response) => {
