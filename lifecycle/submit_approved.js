@@ -18,9 +18,11 @@ const {
   updateJobAvailability,
   updateApplicationStatus,
   insertApplicationStep,
+  insertApplicationAnswerDecisions,
 } = require('./lib/repository');
 const { submitEasyApply } = require('./lib/application-discovery');
 const { submitExternalCustom } = require('./lib/external-apply');
+const { collectAnswerDecisions } = require('./lib/answer-decisions');
 
 async function runSubmitApproved(options = {}) {
   await applyMigrations();
@@ -123,6 +125,13 @@ async function runSubmitApproved(options = {}) {
             },
           });
         }
+
+        await insertApplicationAnswerDecisions(
+          client,
+          application.id,
+          workerRun.id,
+          collectAnswerDecisions(submission),
+        );
 
         if (submission.ok && submission.status === 'submitted') {
           await updateApplicationStatus(client, application.id, {

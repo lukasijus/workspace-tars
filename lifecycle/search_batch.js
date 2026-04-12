@@ -26,10 +26,12 @@ const {
   upsertApplication,
   updateApplicationStatus,
   insertApplicationStep,
+  insertApplicationAnswerDecisions,
   setApprovalState,
 } = require('./lib/repository');
 const { discoverApplicationFlow } = require('./lib/application-discovery');
 const { extractJobKeywords } = require('./lib/job-keyword-extraction');
+const { collectAnswerDecisions } = require('./lib/answer-decisions');
 
 function parseArgs(argv) {
   const args = {
@@ -388,6 +390,13 @@ async function main() {
             unresolvedFields: discovery.unresolvedFields || [],
             externalStep: discovery.discoveredFields || null,
           },
+        );
+
+        await insertApplicationAnswerDecisions(
+          client,
+          updated.id,
+          workerRun.id,
+          collectAnswerDecisions(discovery),
         );
 
         if (discovery.artifacts?.screenshotPath) {

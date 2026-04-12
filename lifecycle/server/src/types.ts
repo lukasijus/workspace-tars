@@ -69,10 +69,32 @@ export interface ApplicationStepRow {
   created_at?: string | Date | null;
 }
 
+export interface AnswerDecisionRow {
+  id: ApplicationId;
+  application_id: ApplicationId;
+  worker_run_id?: ApplicationId | null;
+  question_key: string;
+  question_text?: string | null;
+  field_label?: string | null;
+  field_type?: string | null;
+  answer?: string | null;
+  confidence?: number | string | null;
+  source?: string | null;
+  source_evidence?: string | null;
+  reason?: string | null;
+  risk_level?: string | null;
+  should_auto_fill: boolean;
+  requires_human_review: boolean;
+  resolver_mode?: string | null;
+  metadata?: Record<string, any> | null;
+  created_at?: string | Date | null;
+}
+
 export interface ApplicationDetail {
   application: ApplicationRow;
   artifacts: ArtifactRow[];
   steps: ApplicationStepRow[];
+  answerDecisions: AnswerDecisionRow[];
   latestImageArtifact: ArtifactRow | null;
   latestHtmlArtifact: ArtifactRow | null;
   latestCvArtifact: ArtifactRow | null;
