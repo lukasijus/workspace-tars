@@ -1,21 +1,30 @@
 import { useEffect, useState } from "react";
-import { Alert, Box, Grid, Paper, Snackbar, Stack } from "@mui/material";
+import { Alert, Box, Grid, Paper, Snackbar, Stack, TextField, Select, MenuItem, InputLabel, FormControl } from "@mui/material";
 import { ActionButton } from "../components/ActionButton";
 import { ApplicationTable } from "../components/ApplicationTable";
 import { MetricCard } from "../components/MetricCard";
 import {
   fetchDashboard,
+  fetchApplicationsList,
   retryDiscoveryAll,
   submitApproved,
 } from "../api/client";
-import type { DashboardData } from "../types";
+import type { DashboardData, ApplicationRow } from "../types";
 
 export function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
+  const [listData, setListData] = useState<{ rows: ApplicationRow[]; total: number } | null>(null);
+  
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  const [filterStatus, setFilterStatus] = useState<string>("");
+  const [filterLocation, setFilterLocation] = useState<string>("");
+  const [filterDate, setFilterDate] = useState<string>("");
+
   const [error, setError] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
-  const load = async () => {
+  const loadDashboard = async () => {
     setError(null);
     try {
       setData(await fetchDashboard());
@@ -24,9 +33,32 @@ export function DashboardPage() {
     }
   };
 
+  const loadList = async () => {
+    setError(null);
+    try {
+      const response = await fetchApplicationsList({
+        page: page + 1,
+        limit: rowsPerPage,
+        status: filterStatus || undefined,
+        location: filterLocation || undefined,
+        date: filterDate || undefined,
+      });
+      setListData({ rows: response.data, total: response.total });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError));
+    }
+  };
+
   useEffect(() => {
-    void load();
+    void loadDashboard();
   }, []);
+
+  useEffect(() => {
+    const delayDebounceFn = setTimeout(() => {
+      void loadList();
+    }, 300);
+    return () => clearTimeout(delayDebounceFn);
+  }, [page, rowsPerPage, filterStatus, filterLocation, filterDate]);
 
   const runAction = async (action: "submit" | "retry") => {
     setLoadingAction(action);
@@ -37,7 +69,8 @@ export function DashboardPage() {
       } else {
         await retryDiscoveryAll();
       }
-      await load();
+      await loadDashboard();
+      await loadList();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : String(actionError));
     } finally {
@@ -100,9 +133,78 @@ export function DashboardPage() {
         </Grid>
       </Grid>
 
-      <ApplicationTable title="Pending approval" rows={data?.pendingApproval || []} />
-      <ApplicationTable title="Needs human input" rows={data?.needsHumanInput || []} />
-      <ApplicationTable title="Recent applications" rows={data?.recentApplications || []} />
+      <Paper
+        elevation={0}
+        sx={{
+          p: 2,
+          border: "1px solid",
+          borderColor: "divider",
+          display: "flex",
+          gap: 2,
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
+        <FormControl size="small" sx={{ minWidth: 200 }}>
+          <InputLabel id="status-filter-label">Status</InputLabel>
+          <Select
+            labelId="status-filter-label"
+            value={filterStatus}
+            label="Status"
+            onChange={(e) => {
+              setFilterStatus(e.target.value);
+              setPage(0);
+            }}
+          >
+            <MenuItem value=""><em>Any Status</em></MenuItem>
+            <MenuItem value="pending_approval">pending_approval</MenuItem>
+            <MenuItem value="needs_human_input">needs_human_input</MenuItem>
+            <MenuItem value="approved">approved</MenuItem>
+            <MenuItem value="submitted">submitted</MenuItem>
+            <MenuItem value="skipped">skipped</MenuItem>
+            <MenuItem value="failed">failed</MenuItem>
+          </Select>
+        </FormControl>
+
+        <TextField
+          size="small"
+          label="Location"
+          variant="outlined"
+          value={filterLocation}
+          onChange={(e) => {
+            setFilterLocation(e.target.value);
+            setPage(0);
+          }}
+          sx={{ minWidth: 200 }}
+        />
+
+        <TextField
+          size="small"
+          label="Date Created"
+          type="date"
+          variant="outlined"
+          value={filterDate}
+          onChange={(e) => {
+            setFilterDate(e.target.value);
+            setPage(0);
+          }}
+          slotProps={{ inputLabel: { shrink: true } }}
+          sx={{ minWidth: 200 }}
+        />
+      </Paper>
+
+      <ApplicationTable 
+        title="Application List" 
+        rows={listData?.rows || []} 
+        count={listData?.total || 0}
+        page={page}
+        rowsPerPage={rowsPerPage}
+        onPageChange={(e, newPage) => setPage(newPage)}
+        onRowsPerPageChange={(e) => {
+          setRowsPerPage(parseInt(e.target.value, 10));
+          setPage(0);
+        }}
+      />
 
       <Snackbar open={Boolean(error)} autoHideDuration={8000} onClose={() => setError(null)}>
         <Alert severity="error" onClose={() => setError(null)}>

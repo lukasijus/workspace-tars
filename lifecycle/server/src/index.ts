@@ -9,6 +9,7 @@ import {
   fetchApplication,
   fetchArtifactRow,
   fetchDashboard,
+  getPaginatedApplications,
   inferMimeType,
   markInactive,
   markSubmitted,
@@ -79,6 +80,18 @@ async function createApp() {
 
   app.get("/api/dashboard", asyncRoute(async (_request, response) => {
     response.json(await fetchDashboard());
+  }));
+
+  app.get("/api/applications", asyncRoute(async (request, response) => {
+    response.json(
+      await getPaginatedApplications({
+        page: request.query.page ? Number(request.query.page) : undefined,
+        limit: request.query.limit ? Number(request.query.limit) : undefined,
+        status: request.query.status as string | undefined,
+        location: request.query.location as string | undefined,
+        date: request.query.date as string | undefined,
+      }),
+    );
   }));
 
   app.get("/api/settings", asyncRoute(async (_request, response) => {

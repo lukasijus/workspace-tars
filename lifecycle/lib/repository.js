@@ -807,6 +807,96 @@ async function fetchSchedulerRuns(client, limit = 20) {
   return result.rows;
 }
 
+async function fetchApplicationsList(client, params = {}) {
+  const { limit = 50, offset = 0, status, location, date } = params;
+  const conditions = [];
+  const values = [];
+
+  let idx = 1;
+  if (status) {
+    conditions.push(`applications.status = $${idx++}`);
+    values.push(status);
+  }
+  if (location) {
+    conditions.push(`jobs.location ILIKE $${idx++}`);
+    values.push(`%${location}%`);
+  }
+  if (date) {
+    conditions.push(`applications.created_at::date = $${idx++}`);
+    values.push(date);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const countQuery = `
+    SELECT COUNT(*)::int AS total 
+    FROM applications 
+    JOIN jobs ON jobs.id = applications.job_id 
+    ${whereClause}
+  `;
+
+  const dataQuery = `
+    SELECT
+      applications.*,
+      jobs.company,
+      jobs.title,
+      jobs.location,
+      jobs.source_url,
+      jobs.is_active,
+      jobs.inactive_reason,
+      approvals.actor AS approval_actor,
+      approvals.reason AS approval_reason,
+      latest_step.details ->> 'reason' AS latest_step_reason,
+      latest_image.id AS latest_image_artifact_id,
+      latest_image.file_path AS latest_image_path,
+      latest_html.id AS latest_html_artifact_id,
+      latest_html.file_path AS latest_html_path
+    FROM applications
+    JOIN jobs ON jobs.id = applications.job_id
+    LEFT JOIN approvals ON approvals.application_id = applications.id
+    LEFT JOIN LATERAL (
+      SELECT details
+      FROM application_steps
+      WHERE application_id = applications.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_step ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT id, file_path
+      FROM artifacts
+      WHERE entity_type = 'application'
+        AND entity_id = applications.id
+        AND kind IN ('submission_screenshot', 'discovery_screenshot')
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_image ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT id, file_path
+      FROM artifacts
+      WHERE entity_type = 'application'
+        AND entity_id = applications.id
+        AND kind IN ('submission_html', 'discovery_html')
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) AS latest_html ON TRUE
+    ${whereClause}
+    ORDER BY applications.updated_at DESC
+    LIMIT $${idx++} OFFSET $${idx++}
+  `;
+
+  values.push(limit, offset);
+
+  const [countResult, dataResult] = await Promise.all([
+    client.query(countQuery, values.slice(0, values.length - 2)),
+    client.query(dataQuery, values)
+  ]);
+
+  return {
+    total: countResult.rows[0].total,
+    rows: dataResult.rows
+  };
+}
+
 module.exports = {
   createWorkerRun,
   heartbeatWorkerRun,
@@ -823,6 +913,7 @@ module.exports = {
   findApplicationsForApproval,
   findApprovedApplications,
   fetchApplicationDetail,
+  fetchApplicationsList,
   fetchDashboardStats,
   upsertDailySummary,
   createSchedulerRun,

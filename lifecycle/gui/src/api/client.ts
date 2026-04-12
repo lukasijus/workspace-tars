@@ -1,5 +1,6 @@
 import type {
   ApplicationDetail,
+  ApplicationRow,
   DashboardData,
   Id,
   SchedulerStartRequest,
@@ -47,6 +48,29 @@ function post<T>(url: string, body: unknown = {}) {
 
 export function fetchDashboard() {
   return requestJson<DashboardData>("/api/dashboard");
+}
+
+export function fetchApplicationsList(params: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  location?: string;
+  date?: string;
+}) {
+  const url = new URL("/api/applications", window.location.origin);
+  if (params.page) url.searchParams.set("page", String(params.page));
+  if (params.limit) url.searchParams.set("limit", String(params.limit));
+  if (params.status) url.searchParams.set("status", params.status);
+  if (params.location) url.searchParams.set("location", params.location);
+  if (params.date) url.searchParams.set("date", params.date);
+
+  return requestJson<{
+    ok: true;
+    data: ApplicationRow[];
+    total: number;
+    page: number;
+    limit: number;
+  }>(url.pathname + url.search);
 }
 
 export async function fetchSettings() {

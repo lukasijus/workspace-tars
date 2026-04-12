@@ -7,6 +7,7 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   Typography,
 } from "@mui/material";
@@ -15,9 +16,14 @@ import { StatusChip } from "./StatusChip";
 import type { ApplicationRow } from "../types";
 
 interface ApplicationTableProps {
-  title: string;
+  title?: string;
   rows: ApplicationRow[];
   emptyLabel?: string;
+  count?: number;
+  page?: number;
+  rowsPerPage?: number;
+  onPageChange?: (event: unknown, newPage: number) => void;
+  onRowsPerPageChange?: (event: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
 function roleLabel(row: ApplicationRow) {
@@ -28,14 +34,21 @@ export function ApplicationTable({
   title,
   rows,
   emptyLabel = "No items",
+  count,
+  page,
+  rowsPerPage,
+  onPageChange,
+  onRowsPerPageChange,
 }: ApplicationTableProps) {
   const navigate = useNavigate();
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>
-        {title}
-      </Typography>
+      {title && (
+        <Typography variant="h5" gutterBottom>
+          {title}
+        </Typography>
+      )}
       <TableContainer
         component={Paper}
         elevation={0}
@@ -47,6 +60,7 @@ export function ApplicationTable({
               <TableCell>Role</TableCell>
               <TableCell>Location</TableCell>
               <TableCell>Status</TableCell>
+              <TableCell>Created Date</TableCell>
               <TableCell>Details</TableCell>
             </TableRow>
           </TableHead>
@@ -74,7 +88,7 @@ export function ApplicationTable({
                     },
                   }}
                 >
-                  <TableCell sx={{ maxWidth: 420 }}>
+                  <TableCell sx={{ maxWidth: 350 }}>
                     <Typography variant="body2" sx={{ fontWeight: 800 }}>
                       {roleLabel(row)}
                     </Typography>
@@ -93,7 +107,21 @@ export function ApplicationTable({
                   <TableCell>
                     <StatusChip status={row.status} />
                   </TableCell>
-                  <TableCell sx={{ maxWidth: 460 }}>
+                  <TableCell>
+                    {row.created_at ? (
+                      <Box sx={{ display: "flex", flexDirection: "column" }}>
+                        <Typography variant="body2" noWrap>
+                          {new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(row.created_at))}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(row.created_at))}
+                        </Typography>
+                      </Box>
+                    ) : (
+                      "unknown"
+                    )}
+                  </TableCell>
+                  <TableCell sx={{ maxWidth: 400 }}>
                     <Typography variant="body2" color="text.secondary" noWrap>
                       {row.summary_reason || "No details yet"}
                     </Typography>
@@ -108,11 +136,22 @@ export function ApplicationTable({
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={4}>{emptyLabel}</TableCell>
+                <TableCell colSpan={5}>{emptyLabel}</TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
+        {count !== undefined && page !== undefined && rowsPerPage !== undefined && onPageChange && onRowsPerPageChange && (
+          <TablePagination
+            component="div"
+            count={count}
+            page={page}
+            onPageChange={onPageChange}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={onRowsPerPageChange}
+            rowsPerPageOptions={[10, 25, 50, 100]}
+          />
+        )}
       </TableContainer>
     </Box>
   );

@@ -17,6 +17,7 @@ const { query, withTransaction } = db;
 const {
   createArtifact,
   fetchApplicationDetail,
+  fetchApplicationsList,
   fetchDashboardStats,
   findApplicationsForApproval,
   insertApplicationStep,
@@ -239,6 +240,34 @@ function availableActions(application: ApplicationRow): Record<string, boolean> 
     markInactive: active,
     markSubmitted: application.status !== APPLICATION_STATUS.SUBMITTED,
     submitNow: application.status === APPLICATION_STATUS.APPROVED && active,
+  };
+}
+
+export async function getPaginatedApplications(options: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  location?: string;
+  date?: string;
+}) {
+  const limit = options.limit || 50;
+  const offset = ((options.page || 1) - 1) * limit;
+  const dbClient = { query };
+  
+  const result = await fetchApplicationsList(dbClient, {
+    limit,
+    offset,
+    status: options.status,
+    location: options.location,
+    date: options.date,
+  });
+
+  return {
+    ok: true,
+    data: result.rows.map(summarizeRow),
+    total: result.total,
+    page: options.page || 1,
+    limit,
   };
 }
 

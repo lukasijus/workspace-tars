@@ -44,6 +44,7 @@ export interface ApplicationRow {
   retry_count?: number | null;
   submitted_at?: string | null;
   submission_attempted_at?: string | null;
+  created_at?: string | null;
   updated_at?: string | null;
   is_active?: boolean | null;
   inactive_reason?: string | null;
